@@ -131,7 +131,7 @@ final class ProxyViewModel: ObservableObject {
     let listenAddress = "0.0.0.0:8888"
     @Published private(set) var caCertPath = ""
     @Published private(set) var caStatusText = "Preparing internal CA"
-    @Published var inspectBodies = false
+    @Published var inspectBodies = true
     @Published var isRunning = false
     @Published var statusText = "Stopped"
     @Published var visibleURLFilter = ""
@@ -268,13 +268,16 @@ final class ProxyViewModel: ObservableObject {
         "127.0.0.1:\(parsedListen.port)"
     }
 
-    func refreshMacSystemProxyStatus() {
+    func refreshMacSystemProxyStatus(autoEnableIfDisabled: Bool = false) {
         Task {
             do {
                 let status = try await Task.detached(priority: .userInitiated) {
                     try MacSystemProxyService.readStatus()
                 }.value
                 applyMacSystemProxyStatus(status)
+                if autoEnableIfDisabled && !status.isEnabled {
+                    enableMacSystemProxy()
+                }
             } catch {
                 macSystemProxyEnabled = false
                 macSystemProxyServiceText = "Unknown"

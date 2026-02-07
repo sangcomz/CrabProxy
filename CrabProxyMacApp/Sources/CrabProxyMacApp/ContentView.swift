@@ -13,11 +13,12 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 16) {
-                header
                 controlPanel
                 trafficSplitView
             }
-            .padding(20)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+            .padding(.top, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 1100, minHeight: 720)
@@ -27,33 +28,16 @@ struct ContentView: View {
                 animateBackground = true
             }
         }
-    }
-
-    private var header: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Crab Proxy Studio")
-                    .font(.custom("Avenir Next Demi Bold", size: 34))
-                    .foregroundStyle(.white)
-                Text("Charles-style traffic inspector with Rust MITM core")
-                    .font(.custom("Avenir Next", size: 14))
-                    .foregroundStyle(Color.white.opacity(0.72))
+        .background(
+            WindowAccessor { window in
+                configureMainWindowAppearance(window)
             }
-
-            Spacer()
-
-            HStack(spacing: 10) {
-                StatusBadge(isRunning: model.isRunning, text: model.statusText)
-                IconActionButton(icon: "gearshape.fill", accessibilityLabel: "Open Settings") {
-                    openWindow(id: "settings")
-                }
-            }
-        }
+        )
     }
 
     private var controlPanel: some View {
         VStack(spacing: 12) {
-            HStack {
+            HStack(spacing: 14) {
                 Toggle(isOn: $model.inspectBodies) {
                     Text("Inspect Bodies")
                         .font(.custom("Avenir Next Demi Bold", size: 12))
@@ -61,15 +45,36 @@ struct ContentView: View {
                 }
                 .toggleStyle(.switch)
                 .frame(width: 150)
-                Spacer()
-            }
 
-            HStack(spacing: 10) {
-                LabeledField(
-                    title: "Filter",
-                    placeholder: "Show only URLs containing...",
-                    text: $model.visibleURLFilter
-                )
+                Toggle(isOn: macProxyToggleBinding) {
+                    Text("macOS Proxy")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                }
+                .toggleStyle(.switch)
+                .frame(width: 150)
+                .disabled(model.isApplyingMacSystemProxy || model.macSystemProxyStateText == "Unavailable")
+
+                Button {
+                    openWindow(id: "settings")
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.12))
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open Settings")
+                .help("Open Settings")
+
+                Spacer()
 
                 ActionButton(
                     title: "Start",
@@ -89,69 +94,45 @@ struct ContentView: View {
                 }
                 .disabled(!model.isRunning)
 
-                ActionButton(
-                    title: "Clear",
-                    icon: "trash.fill",
-                    tint: Color(red: 0.34, green: 0.58, blue: 0.94)
-                ) {
-                    model.clearLogs()
-                }
+                StatusBadge(isRunning: model.isRunning, text: model.statusText)
             }
-
-            macSystemProxyQuickRow
         }
         .padding(16)
         .background(GlassCard())
     }
 
-    private var macSystemProxyQuickRow: some View {
-        HStack(spacing: 10) {
-            Text("macOS Proxy")
-                .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.86))
-
-            Text(model.macSystemProxyStateText)
-                .font(.custom("Avenir Next Demi Bold", size: 11))
-                .foregroundStyle(Color.white.opacity(0.82))
-                .lineLimit(1)
-
-            Text("(\(model.macSystemProxyServiceText))")
-                .font(.custom("Avenir Next Medium", size: 11))
-                .foregroundStyle(Color.white.opacity(0.6))
-                .lineLimit(1)
-
-            Spacer()
-
-            ActionButton(
-                title: "Proxy On",
-                icon: "network",
-                tint: Color(red: 0.14, green: 0.82, blue: 0.52)
-            ) {
-                model.enableMacSystemProxy()
+    private var macProxyToggleBinding: Binding<Bool> {
+        Binding(
+            get: { model.macSystemProxyEnabled },
+            set: { enabled in
+                if enabled {
+                    model.enableMacSystemProxy()
+                } else {
+                    model.disableMacSystemProxy()
+                }
             }
-            .disabled(model.isApplyingMacSystemProxy || model.macSystemProxyEnabled)
+        )
+    }
 
-            ActionButton(
-                title: "Proxy Off",
-                icon: "xmark.circle.fill",
-                tint: Color(red: 0.93, green: 0.34, blue: 0.33)
-            ) {
-                model.disableMacSystemProxy()
-            }
-            .disabled(model.isApplyingMacSystemProxy || !model.macSystemProxyEnabled)
-
-            IconActionButton(icon: "arrow.clockwise", accessibilityLabel: "Refresh macOS proxy status") {
-                model.refreshMacSystemProxyStatus()
-            }
-        }
+    private func configureMainWindowAppearance(_ window: NSWindow) {
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.toolbar = nil
     }
 
     private var trafficSplitView: some View {
         HSplitView {
             transactionsPanel
-                .frame(minWidth: 360, idealWidth: 430, maxWidth: 520)
+                .frame(minWidth: 420, idealWidth: 620, maxWidth: 760, maxHeight: .infinity)
+                .layoutPriority(1)
             detailsPanel
+                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.black.opacity(0.24))
@@ -169,6 +150,13 @@ struct ContentView: View {
                     .font(.custom("Avenir Next Demi Bold", size: 18))
                     .foregroundStyle(.white)
                 Spacer()
+                ActionButton(
+                    title: "Clear",
+                    icon: "trash.fill",
+                    tint: Color(red: 0.34, green: 0.58, blue: 0.94)
+                ) {
+                    model.clearLogs()
+                }
                 Text("\(model.filteredLogs.count)")
                     .font(.custom("Avenir Next Demi Bold", size: 11))
                     .foregroundStyle(.white)
@@ -176,6 +164,12 @@ struct ContentView: View {
                     .padding(.vertical, 5)
                     .background(Capsule(style: .continuous).fill(Color.white.opacity(0.15)))
             }
+
+            LabeledField(
+                title: "Filter",
+                placeholder: "Show only traffic URLs containing...",
+                text: $model.visibleURLFilter
+            )
 
             List(selection: $model.selectedLogID) {
                 ForEach(model.filteredLogs) { entry in
@@ -187,6 +181,7 @@ struct ContentView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color.clear)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if model.filteredLogs.isEmpty {
                     Text("No matching requests")
@@ -196,6 +191,7 @@ struct ContentView: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var detailsPanel: some View {
@@ -225,6 +221,7 @@ struct ContentView: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -870,30 +867,6 @@ private struct ActionButton: View {
     }
 }
 
-private struct IconActionButton: View {
-    let icon: String
-    let accessibilityLabel: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(0.12))
-                        .overlay(
-                            Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
-    }
-}
-
 private struct StatusBadge: View {
     let isRunning: Bool
     let text: String
@@ -912,6 +885,28 @@ private struct StatusBadge: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Capsule(style: .continuous).fill(Color.white.opacity(0.12)))
+    }
+}
+
+private struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                onResolve(window)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                onResolve(window)
+            }
+        }
     }
 }
 
