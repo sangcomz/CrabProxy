@@ -3,21 +3,25 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */; };
+		5D64D8A66477A972D3E95AA6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */; };
 		851870D04BF7EE6B5DD21B24 /* RustProxyEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7D4E6ADF8B617AEDC0F5CF /* RustProxyEngine.swift */; };
 		8AAB6707300C3C11867DFA86 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2161575BBD4731EAB29E637C /* Security.framework */; };
 		9D691C5A6DE8BBBC461F9A1F /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55505981D7C9E4433F783A95 /* CoreFoundation.framework */; };
 		CD3EAA3F2868BFF19B8CF9EA /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51ABE9A6D9D984BDB517173D /* ProxyViewModel.swift */; };
 		DEFFE37EE0C9D4730D0AA8F6 /* CrabProxyMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */; };
+		F37AA31AA7D67D9FE36F653C /* AppAppearanceMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */; };
 		FC7EFE13336BA2CD0CDFF5F2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA3842B2A162E3765D5A417 /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearanceMode.swift; sourceTree = "<group>"; };
 		0BA3842B2A162E3765D5A417 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2161575BBD4731EAB29E637C /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSystemProxyService.swift; sourceTree = "<group>"; };
 		3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrabProxyMacApp.swift; sourceTree = "<group>"; };
@@ -68,6 +72,8 @@
 		842A9E92497E46357CFF2A53 /* CrabProxyMacApp */ = {
 			isa = PBXGroup;
 			children = (
+				05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */,
+				1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */,
 				0BA3842B2A162E3765D5A417 /* ContentView.swift */,
 				3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */,
 				367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */,
@@ -95,6 +101,7 @@
 			buildPhases = (
 				CFE5924BA57CA16F3F3BAD41 /* Build Rust static library */,
 				6CACBFE07E75DABB139BC7EC /* Sources */,
+				A6021319CFBF50AE5A7C4EBA /* Resources */,
 				75E11F8D80B7990A9CF33DE5 /* Frameworks */,
 			);
 			buildRules = (
@@ -115,7 +122,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					54561F6C4B512064A4DA891E = {
 						ProvisioningStyle = Automatic;
@@ -132,6 +139,7 @@
 			);
 			mainGroup = 8BAB621861E453DBBA68AC76;
 			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -139,6 +147,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A6021319CFBF50AE5A7C4EBA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5D64D8A66477A972D3E95AA6 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		CFE5924BA57CA16F3F3BAD41 /* Build Rust static library */ = {
@@ -167,6 +186,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F37AA31AA7D67D9FE36F653C /* AppAppearanceMode.swift in Sources */,
 				FC7EFE13336BA2CD0CDFF5F2 /* ContentView.swift in Sources */,
 				DEFFE37EE0C9D4730D0AA8F6 /* CrabProxyMacApp.swift in Sources */,
 				41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */,
@@ -182,6 +202,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -213,11 +235,9 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -249,7 +269,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.sangcomz.CrabProxyMacApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OBJC_BRIDGING_HEADER = "Xcode/CrabProxyMacApp-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -261,6 +280,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -292,11 +313,9 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -335,7 +354,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.sangcomz.CrabProxyMacApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OBJC_BRIDGING_HEADER = "Xcode/CrabProxyMacApp-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -348,7 +366,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -368,7 +385,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

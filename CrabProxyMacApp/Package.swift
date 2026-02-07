@@ -24,6 +24,9 @@ let package = Package(
                 "CCrabMitm",
             ],
             path: "Sources/CrabProxyMacApp",
+            resources: [
+                .process("Assets.xcassets"),
+            ],
             linkerSettings: [
                 .unsafeFlags([
                     "-L", rustDebugLibDir,

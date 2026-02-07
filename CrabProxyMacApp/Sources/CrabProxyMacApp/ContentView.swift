@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var animateBackground = false
     @State private var detailTab: DetailTab = .summary
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -33,6 +34,35 @@ struct ContentView: View {
                 configureMainWindowAppearance(window)
             }
         )
+        .tint(primaryTint)
+    }
+
+    private var primaryTint: Color {
+        CrabTheme.primaryTint(for: colorScheme)
+    }
+
+    private var secondaryTint: Color {
+        CrabTheme.secondaryTint(for: colorScheme)
+    }
+
+    private var destructiveTint: Color {
+        CrabTheme.destructiveTint(for: colorScheme)
+    }
+
+    private var panelFill: Color {
+        CrabTheme.panelFill(for: colorScheme)
+    }
+
+    private var panelStroke: Color {
+        CrabTheme.panelStroke(for: colorScheme)
+    }
+
+    private var primaryText: Color {
+        CrabTheme.primaryText(for: colorScheme)
+    }
+
+    private var secondaryText: Color {
+        CrabTheme.secondaryText(for: colorScheme)
     }
 
     private var controlPanel: some View {
@@ -41,7 +71,7 @@ struct ContentView: View {
                 Toggle(isOn: $model.inspectBodies) {
                     Text("Inspect Bodies")
                         .font(.custom("Avenir Next Demi Bold", size: 12))
-                        .foregroundStyle(Color.white.opacity(0.9))
+                        .foregroundStyle(primaryText)
                 }
                 .toggleStyle(.switch)
                 .frame(width: 150)
@@ -49,7 +79,7 @@ struct ContentView: View {
                 Toggle(isOn: macProxyToggleBinding) {
                     Text("macOS Proxy")
                         .font(.custom("Avenir Next Demi Bold", size: 12))
-                        .foregroundStyle(Color.white.opacity(0.9))
+                        .foregroundStyle(primaryText)
                 }
                 .toggleStyle(.switch)
                 .frame(width: 150)
@@ -60,13 +90,13 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(primaryText)
                         .frame(width: 28, height: 28)
                         .background(
                             Circle()
-                                .fill(Color.white.opacity(0.12))
+                                .fill(CrabTheme.softFill(for: colorScheme))
                                 .overlay(
-                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    Circle().stroke(panelStroke, lineWidth: 1)
                                 )
                         )
                 }
@@ -79,7 +109,7 @@ struct ContentView: View {
                 ActionButton(
                     title: "Start",
                     icon: "play.fill",
-                    tint: Color(red: 0.14, green: 0.82, blue: 0.52)
+                    tint: primaryTint
                 ) {
                     model.startProxy()
                 }
@@ -88,7 +118,7 @@ struct ContentView: View {
                 ActionButton(
                     title: "Stop",
                     icon: "stop.fill",
-                    tint: Color(red: 0.93, green: 0.34, blue: 0.33)
+                    tint: destructiveTint
                 ) {
                     model.stopProxy()
                 }
@@ -135,10 +165,10 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.24))
+                .fill(panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        .stroke(panelStroke, lineWidth: 1)
                 )
         )
     }
@@ -148,21 +178,21 @@ struct ContentView: View {
             HStack {
                 Text("Traffic")
                     .font(.custom("Avenir Next Demi Bold", size: 18))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(primaryText)
                 Spacer()
                 ActionButton(
                     title: "Clear",
                     icon: "trash.fill",
-                    tint: Color(red: 0.34, green: 0.58, blue: 0.94)
+                    tint: secondaryTint
                 ) {
                     model.clearLogs()
                 }
                 Text("\(model.filteredLogs.count)")
                     .font(.custom("Avenir Next Demi Bold", size: 11))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(primaryText)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Capsule(style: .continuous).fill(Color.white.opacity(0.15)))
+                    .background(Capsule(style: .continuous).fill(CrabTheme.softFill(for: colorScheme)))
             }
 
             LabeledField(
@@ -186,7 +216,7 @@ struct ContentView: View {
                 if model.filteredLogs.isEmpty {
                     Text("No matching requests")
                         .font(.custom("Avenir Next Medium", size: 14))
-                        .foregroundStyle(Color.white.opacity(0.55))
+                        .foregroundStyle(secondaryText)
                 }
             }
         }
@@ -198,7 +228,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Detail")
                 .font(.custom("Avenir Next Demi Bold", size: 18))
-                .foregroundStyle(.white)
+                .foregroundStyle(primaryText)
 
             if let entry = model.selectedLog {
                 Picker("", selection: $detailTab) {
@@ -216,7 +246,7 @@ struct ContentView: View {
                 Spacer()
                 Text("Select a request from the left panel")
                     .font(.custom("Avenir Next Medium", size: 14))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .foregroundStyle(secondaryText)
                 Spacer()
             }
         }
@@ -240,12 +270,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 MethodBadge(method: entry.method)
-                ValuePill(text: entry.statusCode ?? "--", tint: Color(red: 0.34, green: 0.58, blue: 0.94))
-                ValuePill(text: entry.event, tint: Color(red: 0.14, green: 0.82, blue: 0.52))
+                ValuePill(text: entry.statusCode ?? "--", tint: secondaryTint)
+                ValuePill(text: entry.event, tint: primaryTint)
                 Spacer()
                 Text(formatLogTimeWithSeconds(entry.timestamp))
                     .font(.custom("Menlo", size: 11))
-                    .foregroundStyle(Color.white.opacity(0.65))
+                    .foregroundStyle(secondaryText)
             }
 
             DetailLine(title: "URL", value: entry.url)
@@ -259,7 +289,7 @@ struct ContentView: View {
 
             Text("Raw Log")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.8))
+                .foregroundStyle(primaryText.opacity(0.86))
                 .padding(.top, 4)
 
             CodeBlock(text: entry.rawLine, placeholder: "No raw log")
@@ -270,7 +300,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Request Headers")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.85))
+                .foregroundStyle(primaryText.opacity(0.9))
             CodeBlock(
                 text: entry.requestHeaders,
                 placeholder: "No captured request headers"
@@ -278,7 +308,7 @@ struct ContentView: View {
 
             Text("Response Headers")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.85))
+                .foregroundStyle(primaryText.opacity(0.9))
             CodeBlock(
                 text: entry.responseHeaders,
                 placeholder: "No captured response headers"
@@ -290,7 +320,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Request Body")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.85))
+                .foregroundStyle(primaryText.opacity(0.9))
             CodeBlock(
                 text: entry.requestBodyPreview,
                 placeholder: "No captured request body preview"
@@ -298,7 +328,7 @@ struct ContentView: View {
 
             Text("Response Body")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.85))
+                .foregroundStyle(primaryText.opacity(0.9))
             CodeBlock(
                 text: entry.responseBodyPreview,
                 placeholder: "No captured response body preview"
@@ -309,25 +339,57 @@ struct ContentView: View {
 
 struct SettingsView: View {
     @ObservedObject var model: ProxyViewModel
+    @Binding var appearanceModeRawValue: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var appearanceModeBinding: Binding<AppAppearanceMode> {
+        Binding<AppAppearanceMode>(
+            get: { AppAppearanceMode(rawValue: appearanceModeRawValue) ?? .system },
+            set: { appearanceModeRawValue = $0.rawValue }
+        )
+    }
 
     var body: some View {
-        TabView {
-            RulesSettingsView(model: model)
-                .tabItem {
-                    Label("Rules", systemImage: "slider.horizontal.3")
-                }
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                Text("Appearance")
+                    .font(.custom("Avenir Next Demi Bold", size: 14))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-            DeviceSetupView(model: model)
-                .tabItem {
-                    Label("Device", systemImage: "iphone.and.arrow.forward")
+                Picker("Appearance", selection: appearanceModeBinding) {
+                    ForEach(AppAppearanceMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .frame(width: 300)
+
+                Spacer()
+            }
+            .padding(14)
+            .background(GlassCard())
+
+            TabView {
+                RulesSettingsView(model: model)
+                    .tabItem {
+                        Label("Rules", systemImage: "slider.horizontal.3")
+                    }
+
+                DeviceSetupView(model: model)
+                    .tabItem {
+                        Label("Device", systemImage: "iphone.and.arrow.forward")
+                    }
+            }
         }
+        .tint(CrabTheme.primaryTint(for: colorScheme))
+        .padding(16)
         .frame(minWidth: 1080, minHeight: 700)
     }
 }
 
 struct RulesSettingsView: View {
     @ObservedObject var model: ProxyViewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -338,11 +400,11 @@ struct RulesSettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Rules Settings")
                         .font(.custom("Avenir Next Demi Bold", size: 28))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
                     Text("Allowlist / Map Local / Status Rewrite rules are applied when you press Start.")
                         .font(.custom("Avenir Next Medium", size: 13))
-                        .foregroundStyle(Color.white.opacity(0.72))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
                     allowListSection
                     mapLocalSection
@@ -359,16 +421,17 @@ struct RulesSettingsView: View {
             HStack {
                 Text("Allowlist")
                     .font(.custom("Avenir Next Demi Bold", size: 18))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
                     model.addAllowRule()
                 }
+                .tint(CrabTheme.primaryTint(for: colorScheme))
             }
 
             Text("Examples: *.* (all), naver.com, api.naver.com/v1, /graphql")
                 .font(.custom("Avenir Next Medium", size: 12))
-                .foregroundStyle(Color.white.opacity(0.68))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
             if model.allowRules.isEmpty {
                 EmptyRuleHint(text: "No allowlist rule. Empty means allow all traffic.")
@@ -387,10 +450,10 @@ struct RulesSettingsView: View {
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.black.opacity(0.23))
+                            .fill(CrabTheme.ruleCardFill(for: colorScheme))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
                             )
                     )
                 }
@@ -405,11 +468,12 @@ struct RulesSettingsView: View {
             HStack {
                 Text("Map Local")
                     .font(.custom("Avenir Next Demi Bold", size: 18))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
                     model.addMapLocalRule()
                 }
+                .tint(CrabTheme.primaryTint(for: colorScheme))
             }
 
             if model.mapLocalRules.isEmpty {
@@ -450,10 +514,10 @@ struct RulesSettingsView: View {
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.black.opacity(0.23))
+                            .fill(CrabTheme.ruleCardFill(for: colorScheme))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
                             )
                     )
                 }
@@ -468,11 +532,12 @@ struct RulesSettingsView: View {
             HStack {
                 Text("Status Rewrite")
                     .font(.custom("Avenir Next Demi Bold", size: 18))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
                     model.addStatusRewriteRule()
                 }
+                .tint(CrabTheme.primaryTint(for: colorScheme))
             }
 
             if model.statusRewriteRules.isEmpty {
@@ -486,7 +551,7 @@ struct RulesSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 130)
                         Text("→")
-                            .foregroundStyle(Color.white.opacity(0.8))
+                            .foregroundStyle(CrabTheme.primaryText(for: colorScheme).opacity(0.85))
                         TextField("To", text: $rule.toStatusCode)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 110)
@@ -500,10 +565,10 @@ struct RulesSettingsView: View {
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.black.opacity(0.23))
+                            .fill(CrabTheme.ruleCardFill(for: colorScheme))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
                             )
                     )
                 }
@@ -516,6 +581,7 @@ struct RulesSettingsView: View {
 
 struct DeviceSetupView: View {
     @ObservedObject var model: ProxyViewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -526,11 +592,11 @@ struct DeviceSetupView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Device Setup")
                         .font(.custom("Avenir Next Demi Bold", size: 28))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
                     Text("Use this page for mobile proxy IP and certificate portal.")
                         .font(.custom("Avenir Next Medium", size: 13))
-                        .foregroundStyle(Color.white.opacity(0.74))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
                     proxySection
                     certPortalSection
@@ -545,18 +611,18 @@ struct DeviceSetupView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Phone Proxy Address")
                 .font(.custom("Avenir Next Demi Bold", size: 18))
-                .foregroundStyle(.white)
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
             Text("Set this as proxy server on iOS/Android.")
                 .font(.custom("Avenir Next Medium", size: 12))
-                .foregroundStyle(Color.white.opacity(0.76))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
             if let endpoint = model.mobileProxyEndpoint {
                 CopyValueRow(title: "Use on iOS/Android", value: endpoint)
             } else {
                 Text("No LAN IPv4 found. Check Wi-Fi/LAN connection.")
                     .font(.custom("Avenir Next Medium", size: 12))
-                    .foregroundStyle(Color.white.opacity(0.6))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
             }
         }
         .padding(14)
@@ -567,11 +633,11 @@ struct DeviceSetupView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Certificate Portal")
                 .font(.custom("Avenir Next Demi Bold", size: 18))
-                .foregroundStyle(.white)
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
             Text("Open this URL from phone browser after proxy is configured.")
                 .font(.custom("Avenir Next Medium", size: 12))
-                .foregroundStyle(Color.white.opacity(0.76))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
             CopyValueRow(title: "Portal", value: model.certPortalURL)
         }
@@ -591,6 +657,7 @@ private enum DetailTab: String, CaseIterable, Identifiable {
 
 private struct TransactionRow: View {
     let entry: ProxyLogEntry
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -598,19 +665,19 @@ private struct TransactionRow: View {
                 MethodBadge(method: entry.method)
                 Text(entry.statusCode ?? "--")
                     .font(.custom("Menlo", size: 11))
-                    .foregroundStyle(Color(red: 0.68, green: 0.89, blue: 1.0))
+                    .foregroundStyle(CrabTheme.secondaryTint(for: colorScheme))
                 Text(entry.event)
                     .font(.custom("Avenir Next Demi Bold", size: 11))
-                    .foregroundStyle(Color.white.opacity(0.7))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 Spacer()
                 Text(formatLogTimeWithSeconds(entry.timestamp))
                     .font(.custom("Menlo", size: 10))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme).opacity(0.8))
             }
 
             Text(entry.url)
                 .font(.custom("Menlo", size: 11))
-                .foregroundStyle(Color.white.opacity(0.88))
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme).opacity(0.92))
                 .lineLimit(1)
         }
         .padding(.vertical, 4)
@@ -620,6 +687,7 @@ private struct TransactionRow: View {
 private struct CodeBlock: View {
     let text: String?
     let placeholder: String
+    @Environment(\.colorScheme) private var colorScheme
 
     private var renderedText: String {
         guard let text, !text.isEmpty else { return placeholder }
@@ -638,8 +706,8 @@ private struct CodeBlock: View {
                 .font(.custom("Menlo", size: 11))
                 .foregroundStyle(
                     hasContent
-                        ? Color(red: 0.88, green: 0.93, blue: 0.96)
-                        : Color.white.opacity(0.5)
+                        ? CrabTheme.primaryText(for: colorScheme).opacity(0.92)
+                        : CrabTheme.secondaryText(for: colorScheme)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
@@ -647,10 +715,10 @@ private struct CodeBlock: View {
         .frame(minHeight: 120)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.27))
+                .fill(CrabTheme.inputFill(for: colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
                 )
         )
     }
@@ -659,17 +727,18 @@ private struct CodeBlock: View {
 private struct CopyValueRow: View {
     let title: String
     let value: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 10) {
             Text(title)
                 .font(.custom("Avenir Next Demi Bold", size: 11))
-                .foregroundStyle(Color.white.opacity(0.78))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 .frame(width: 120, alignment: .leading)
 
             Text(value)
                 .font(.custom("Menlo", size: 11))
-                .foregroundStyle(Color.white.opacity(0.92))
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 .lineLimit(1)
                 .textSelection(.enabled)
 
@@ -681,16 +750,16 @@ private struct CopyValueRow: View {
             }
             .buttonStyle(.borderless)
             .font(.custom("Avenir Next Demi Bold", size: 11))
-            .foregroundStyle(Color.white.opacity(0.9))
+            .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.22))
+                .fill(CrabTheme.inputFill(for: colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.11), lineWidth: 1)
+                        .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
                 )
         )
     }
@@ -698,6 +767,7 @@ private struct CopyValueRow: View {
 
 private struct MethodBadge: View {
     let method: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Text(method)
@@ -714,15 +784,15 @@ private struct MethodBadge: View {
     private var methodTint: Color {
         switch method {
         case "GET":
-            return Color(red: 0.17, green: 0.64, blue: 0.93)
+            return CrabTheme.secondaryTint(for: colorScheme)
         case "POST":
-            return Color(red: 0.16, green: 0.75, blue: 0.54)
+            return CrabTheme.primaryTint(for: colorScheme)
         case "PUT", "PATCH":
-            return Color(red: 0.94, green: 0.58, blue: 0.2)
+            return CrabTheme.warningTint(for: colorScheme)
         case "DELETE":
-            return Color(red: 0.9, green: 0.33, blue: 0.32)
+            return CrabTheme.destructiveTint(for: colorScheme)
         default:
-            return Color(red: 0.52, green: 0.56, blue: 0.63)
+            return CrabTheme.neutralTint(for: colorScheme)
         }
     }
 }
@@ -746,16 +816,17 @@ private struct ValuePill: View {
 private struct DetailLine: View {
     let title: String
     let value: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(title)
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.7))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 .frame(width: 70, alignment: .leading)
             Text(value)
                 .font(.custom("Menlo", size: 11))
-                .foregroundStyle(Color.white.opacity(0.9))
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 .textSelection(.enabled)
         }
     }
@@ -763,11 +834,12 @@ private struct DetailLine: View {
 
 private struct EmptyRuleHint: View {
     let text: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Text(text)
             .font(.custom("Avenir Next Medium", size: 13))
-            .foregroundStyle(Color.white.opacity(0.58))
+            .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 8)
     }
@@ -775,27 +847,24 @@ private struct EmptyRuleHint: View {
 
 private struct ProxyBackground: View {
     let animateBackground: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [
-                    Color(red: 0.03, green: 0.09, blue: 0.16),
-                    Color(red: 0.05, green: 0.18, blue: 0.21),
-                    Color(red: 0.06, green: 0.16, blue: 0.11),
-                ],
+                colors: CrabTheme.backgroundGradient(for: colorScheme),
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
 
             Circle()
-                .fill(Color(red: 0.14, green: 0.82, blue: 0.52).opacity(0.23))
+                .fill(CrabTheme.primaryTint(for: colorScheme).opacity(colorScheme == .light ? 0.24 : 0.23))
                 .frame(width: 420, height: 420)
                 .blur(radius: 40)
                 .offset(x: animateBackground ? 220 : 130, y: -180)
 
             Circle()
-                .fill(Color(red: 0.34, green: 0.58, blue: 0.94).opacity(0.2))
+                .fill(CrabTheme.secondaryTint(for: colorScheme).opacity(colorScheme == .light ? 0.2 : 0.18))
                 .frame(width: 500, height: 500)
                 .blur(radius: 48)
                 .offset(x: animateBackground ? -280 : -120, y: 250)
@@ -807,26 +876,27 @@ private struct LabeledField: View {
     let title: String
     let placeholder: String
     @Binding var text: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
                 .font(.custom("Avenir Next Demi Bold", size: 12))
-                .foregroundStyle(Color.white.opacity(0.82))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 .frame(width: 52, alignment: .leading)
 
             TextField(placeholder, text: $text)
                 .font(.custom("Avenir Next Medium", size: 12))
                 .textFieldStyle(.plain)
-                .foregroundStyle(.white)
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.black.opacity(0.22))
+                        .fill(CrabTheme.inputFill(for: colorScheme))
                         .overlay(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                                .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
                         )
                 )
         }
@@ -870,6 +940,7 @@ private struct ActionButton: View {
 private struct StatusBadge: View {
     let isRunning: Bool
     let text: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 8) {
@@ -881,10 +952,10 @@ private struct StatusBadge: View {
                 .font(.custom("Avenir Next Demi Bold", size: 12))
                 .lineLimit(1)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Capsule(style: .continuous).fill(Color.white.opacity(0.12)))
+        .background(Capsule(style: .continuous).fill(CrabTheme.softFill(for: colorScheme)))
     }
 }
 
@@ -911,13 +982,194 @@ private struct WindowAccessor: NSViewRepresentable {
 }
 
 private struct GlassCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color.white.opacity(0.09))
+            .fill(CrabTheme.glassFill(for: colorScheme))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
             )
+    }
+}
+
+private enum CrabTheme {
+    static func primaryTint(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.93, green: 0.39, blue: 0.12)
+        case .dark:
+            return Color(red: 0.14, green: 0.82, blue: 0.52)
+        @unknown default:
+            return Color(red: 0.93, green: 0.39, blue: 0.12)
+        }
+    }
+
+    static func secondaryTint(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.98, green: 0.66, blue: 0.25)
+        case .dark:
+            return Color(red: 0.34, green: 0.58, blue: 0.94)
+        @unknown default:
+            return Color(red: 0.98, green: 0.66, blue: 0.25)
+        }
+    }
+
+    static func destructiveTint(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.82, green: 0.28, blue: 0.24)
+        case .dark:
+            return Color(red: 0.93, green: 0.34, blue: 0.33)
+        @unknown default:
+            return Color(red: 0.82, green: 0.28, blue: 0.24)
+        }
+    }
+
+    static func warningTint(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.93, green: 0.57, blue: 0.17)
+        case .dark:
+            return Color(red: 0.94, green: 0.58, blue: 0.2)
+        @unknown default:
+            return Color(red: 0.93, green: 0.57, blue: 0.17)
+        }
+    }
+
+    static func neutralTint(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.52, green: 0.42, blue: 0.36)
+        case .dark:
+            return Color(red: 0.52, green: 0.56, blue: 0.63)
+        @unknown default:
+            return Color(red: 0.52, green: 0.42, blue: 0.36)
+        }
+    }
+
+    static func primaryText(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.21, green: 0.15, blue: 0.12)
+        case .dark:
+            return Color.white.opacity(0.95)
+        @unknown default:
+            return Color(red: 0.21, green: 0.15, blue: 0.12)
+        }
+    }
+
+    static func secondaryText(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.38, green: 0.29, blue: 0.24).opacity(0.9)
+        case .dark:
+            return Color.white.opacity(0.72)
+        @unknown default:
+            return Color(red: 0.38, green: 0.29, blue: 0.24).opacity(0.9)
+        }
+    }
+
+    static func glassFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.66)
+        case .dark:
+            return Color.white.opacity(0.09)
+        @unknown default:
+            return Color.white.opacity(0.66)
+        }
+    }
+
+    static func panelFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.6)
+        case .dark:
+            return Color.black.opacity(0.24)
+        @unknown default:
+            return Color.white.opacity(0.6)
+        }
+    }
+
+    static func panelStroke(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.9)
+        case .dark:
+            return Color.white.opacity(0.12)
+        @unknown default:
+            return Color.white.opacity(0.9)
+        }
+    }
+
+    static func softFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.68)
+        case .dark:
+            return Color.white.opacity(0.12)
+        @unknown default:
+            return Color.white.opacity(0.68)
+        }
+    }
+
+    static func inputFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.8)
+        case .dark:
+            return Color.black.opacity(0.22)
+        @unknown default:
+            return Color.white.opacity(0.8)
+        }
+    }
+
+    static func inputStroke(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color(red: 0.92, green: 0.76, blue: 0.67).opacity(0.9)
+        case .dark:
+            return Color.white.opacity(0.15)
+        @unknown default:
+            return Color(red: 0.92, green: 0.76, blue: 0.67).opacity(0.9)
+        }
+    }
+
+    static func ruleCardFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.74)
+        case .dark:
+            return Color.black.opacity(0.23)
+        @unknown default:
+            return Color.white.opacity(0.74)
+        }
+    }
+
+    static func backgroundGradient(for scheme: ColorScheme) -> [Color] {
+        switch scheme {
+        case .light:
+            return [
+                Color(red: 0.99, green: 0.93, blue: 0.88),
+                Color(red: 0.99, green: 0.90, blue: 0.82),
+                Color(red: 0.98, green: 0.86, blue: 0.74),
+            ]
+        case .dark:
+            return [
+                Color(red: 0.03, green: 0.09, blue: 0.16),
+                Color(red: 0.05, green: 0.18, blue: 0.21),
+                Color(red: 0.06, green: 0.16, blue: 0.11),
+            ]
+        @unknown default:
+            return [
+                Color(red: 0.99, green: 0.93, blue: 0.88),
+                Color(red: 0.99, green: 0.90, blue: 0.82),
+                Color(red: 0.98, green: 0.86, blue: 0.74),
+            ]
+        }
     }
 }
 
