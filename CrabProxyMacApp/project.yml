@@ -1,0 +1,60 @@
+name: CrabProxyMacApp
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  minimumXcodeGenVersion: 2.38.0
+  createIntermediateGroups: true
+
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.sangcomz.CrabProxyMacApp
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_OBJC_BRIDGING_HEADER: Xcode/CrabProxyMacApp-Bridging-Header.h
+    HEADER_SEARCH_PATHS:
+      - $(inherited)
+      - $(SRCROOT)/../crab-mitm/include
+    LIBRARY_SEARCH_PATHS:
+      - $(inherited)
+      - $(SRCROOT)/../crab-mitm/target/debug
+      - $(SRCROOT)/../crab-mitm/target/release
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -lcrab_mitm
+      - -liconv
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+    INFOPLIST_KEY_NSHighResolutionCapable: YES
+
+targets:
+  CrabProxyMacApp:
+    type: application
+    platform: macOS
+    supportedDestinations: [macOS]
+    sources:
+      - path: Sources/CrabProxyMacApp
+    preBuildScripts:
+      - name: Build Rust static library
+        basedOnDependencyAnalysis: false
+        script: |
+          /bin/bash "$SRCROOT/Scripts/build-rust.sh"
+    dependencies:
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+    settings:
+      base:
+        PRODUCT_NAME: CrabProxyMacApp
+        SWIFT_EMIT_LOC_STRINGS: NO
+
+schemes:
+  CrabProxyMacApp:
+    build:
+      targets:
+        CrabProxyMacApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    archive:
+      config: Release
