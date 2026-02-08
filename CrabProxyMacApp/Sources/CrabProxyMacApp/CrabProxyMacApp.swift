@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -13,6 +14,12 @@ struct CrabProxyMacApp: App {
         WindowGroup("Crab Proxy") {
             ContentView(model: model)
                 .preferredColorScheme(appearanceMode.preferredColorScheme)
+                .onAppear {
+                    applyAppAppearance()
+                }
+                .onChange(of: appearanceModeRawValue) { _, _ in
+                    applyAppAppearance()
+                }
         }
 
         WindowGroup("Settings", id: "settings") {
@@ -21,7 +28,31 @@ struct CrabProxyMacApp: App {
                 appearanceModeRawValue: $appearanceModeRawValue
             )
             .preferredColorScheme(appearanceMode.preferredColorScheme)
+            .onAppear {
+                applyAppAppearance()
+            }
+            .onChange(of: appearanceModeRawValue) { _, _ in
+                applyAppAppearance()
+            }
         }
         .defaultSize(width: 1080, height: 700)
+    }
+
+    @MainActor
+    private func applyAppAppearance() {
+        let forcedAppearance: NSAppearance?
+        switch appearanceMode {
+        case .system:
+            forcedAppearance = nil
+        case .light:
+            forcedAppearance = NSAppearance(named: .aqua)
+        case .dark:
+            forcedAppearance = NSAppearance(named: .darkAqua)
+        }
+
+        NSApp.appearance = forcedAppearance
+        for window in NSApp.windows {
+            window.appearance = forcedAppearance
+        }
     }
 }

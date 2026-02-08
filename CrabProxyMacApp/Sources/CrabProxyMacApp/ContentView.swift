@@ -247,6 +247,7 @@ struct ContentView: View {
                 Text("Select a request from the left panel")
                     .font(.custom("Avenir Next Medium", size: 14))
                     .foregroundStyle(secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 Spacer()
             }
         }
@@ -342,6 +343,32 @@ struct SettingsView: View {
     @Binding var appearanceModeRawValue: String
     @Environment(\.colorScheme) private var colorScheme
 
+    var body: some View {
+        TabView {
+            GeneralSettingsView(appearanceModeRawValue: $appearanceModeRawValue)
+                .tabItem {
+                    Label("General", systemImage: "gearshape")
+                }
+
+            RulesSettingsView(model: model)
+                .tabItem {
+                    Label("Rules", systemImage: "slider.horizontal.3")
+                }
+
+            DeviceSetupView(model: model)
+                .tabItem {
+                    Label("Device", systemImage: "iphone.and.arrow.forward")
+                }
+        }
+        .tint(CrabTheme.primaryTint(for: colorScheme))
+        .frame(minWidth: 1080, minHeight: 700)
+    }
+}
+
+struct GeneralSettingsView: View {
+    @Binding var appearanceModeRawValue: String
+    @Environment(\.colorScheme) private var colorScheme
+
     private var appearanceModeBinding: Binding<AppAppearanceMode> {
         Binding<AppAppearanceMode>(
             get: { AppAppearanceMode(rawValue: appearanceModeRawValue) ?? .system },
@@ -350,40 +377,42 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                Text("Appearance")
-                    .font(.custom("Avenir Next Demi Bold", size: 14))
+        ZStack {
+            ProxyBackground(animateBackground: true)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text("General")
+                    .font(.custom("Avenir Next Demi Bold", size: 28))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-                Picker("Appearance", selection: appearanceModeBinding) {
-                    ForEach(AppAppearanceMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Appearance")
+                        .font(.custom("Avenir Next Demi Bold", size: 16))
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                    Text("Choose how Crab Proxy Studio looks.")
+                        .font(.custom("Avenir Next Medium", size: 13))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                    Picker("", selection: appearanceModeBinding) {
+                        ForEach(AppAppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 360)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
+                .padding(14)
+                .background(GlassCard())
 
                 Spacer()
             }
-            .padding(14)
-            .background(GlassCard())
-
-            TabView {
-                RulesSettingsView(model: model)
-                    .tabItem {
-                        Label("Rules", systemImage: "slider.horizontal.3")
-                    }
-
-                DeviceSetupView(model: model)
-                    .tabItem {
-                        Label("Device", systemImage: "iphone.and.arrow.forward")
-                    }
-            }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .tint(CrabTheme.primaryTint(for: colorScheme))
-        .padding(16)
-        .frame(minWidth: 1080, minHeight: 700)
+        .frame(minWidth: 980, minHeight: 620)
     }
 }
 
@@ -1000,7 +1029,7 @@ private enum CrabTheme {
         case .light:
             return Color(red: 0.93, green: 0.39, blue: 0.12)
         case .dark:
-            return Color(red: 0.14, green: 0.82, blue: 0.52)
+            return Color(red: 0.79, green: 0.40, blue: 0.17)
         @unknown default:
             return Color(red: 0.93, green: 0.39, blue: 0.12)
         }
@@ -1011,7 +1040,7 @@ private enum CrabTheme {
         case .light:
             return Color(red: 0.98, green: 0.66, blue: 0.25)
         case .dark:
-            return Color(red: 0.34, green: 0.58, blue: 0.94)
+            return Color(red: 0.62, green: 0.35, blue: 0.16)
         @unknown default:
             return Color(red: 0.98, green: 0.66, blue: 0.25)
         }
