@@ -1,0 +1,349 @@
+import Foundation
+
+struct ProxyLogEntry: Identifiable, Hashable {
+    let id: UUID
+    let timestamp: Date
+    let level: UInt8
+    let levelLabel: String
+    let event: String
+    let method: String
+    let url: String
+    let statusCode: String?
+    let peer: String?
+    let mapLocalMatcher: String?
+    var requestHeaders: String?
+    var responseHeaders: String?
+    var requestBodyPreview: String?
+    var responseBodyPreview: String?
+    let rawLine: String
+}
+
+private struct PendingTransactionMeta {
+    var requestHeaders: String?
+    var responseHeaders: String?
+    var requestBodyPreview: String?
+    var responseBodyPreview: String?
+
+    var isEmpty: Bool {
+        requestHeaders == nil
+            && responseHeaders == nil
+            && requestBodyPreview == nil
+            && responseBodyPreview == nil
+    }
+
+    mutating func merge(_ other: PendingTransactionMeta) {
+        if let value = other.requestHeaders { requestHeaders = value }
+        if let value = other.responseHeaders { responseHeaders = value }
+        if let value = other.requestBodyPreview { requestBodyPreview = value }
+        if let value = other.responseBodyPreview { responseBodyPreview = value }
+    }
+}
+
+@MainActor
+final class ProxyLogStore {
+    private(set) var logs: [ProxyLogEntry] = []
+    private var pendingMetaByKey: [String: PendingTransactionMeta] = [:]
+    private var latestLogIDByKey: [String: UUID] = [:]
+    private var logIndexByID: [UUID: Int] = [:]
+    private let maxLogEntries: Int
+
+    init(maxLogEntries: Int) {
+        self.maxLogEntries = maxLogEntries
+    }
+
+    func clear() -> [ProxyLogEntry] {
+        logs.removeAll(keepingCapacity: true)
+        pendingMetaByKey.removeAll(keepingCapacity: true)
+        latestLogIDByKey.removeAll(keepingCapacity: true)
+        logIndexByID.removeAll(keepingCapacity: true)
+        return logs
+    }
+
+    func selectedLog(id: ProxyLogEntry.ID?) -> ProxyLogEntry? {
+        guard let id, let index = logIndexByID[id], logs.indices.contains(index) else { return nil }
+        return logs[index]
+    }
+
+    func append(level: UInt8, message: String, currentSelectedLogID: ProxyLogEntry.ID?) -> (logs: [ProxyLogEntry], selectedLogID: ProxyLogEntry.ID?)? {
+        let trimmedLine = trimmed(message)
+        guard !trimmedLine.isEmpty else { return nil }
+
+        if let metadataUpdated = handleMetadataLog(trimmedLine) {
+            if metadataUpdated {
+                return (logs, currentSelectedLogID)
+            }
+            return nil
+        }
+
+        guard let entry = makeEntry(level: level, line: trimmedLine) else { return nil }
+
+        let key = transactionKey(peer: entry.peer, method: entry.method, url: entry.url)
+        var materialized = entry
+        if let pending = pendingMetaByKey.removeValue(forKey: key) {
+            apply(meta: pending, to: &materialized)
+        }
+
+        logs.append(materialized)
+        latestLogIDByKey[key] = materialized.id
+        logIndexByID[materialized.id] = logs.count - 1
+
+        if logs.count > maxLogEntries {
+            let overflow = logs.count - maxLogEntries
+            let removedIDs = Set(logs.prefix(overflow).map(\.id))
+            logs.removeFirst(overflow)
+            latestLogIDByKey = latestLogIDByKey.filter { !removedIDs.contains($0.value) }
+            rebuildLogIndex()
+        }
+
+        let isSelectionValid = currentSelectedLogID.flatMap { logIndexByID[$0] } != nil
+        let selectedLogID = (currentSelectedLogID == nil || !isSelectionValid) ? logs.last?.id : currentSelectedLogID
+        return (logs, selectedLogID)
+    }
+
+    func appendBatch(
+        _ events: [(level: UInt8, message: String)],
+        currentSelectedLogID: ProxyLogEntry.ID?
+    ) -> (logs: [ProxyLogEntry], selectedLogID: ProxyLogEntry.ID?)? {
+        guard !events.isEmpty else { return nil }
+
+        var selected = currentSelectedLogID
+        var didChange = false
+
+        for event in events {
+            if let snapshot = append(
+                level: event.level,
+                message: event.message,
+                currentSelectedLogID: selected
+            ) {
+                selected = snapshot.selectedLogID
+                didChange = true
+            }
+        }
+
+        guard didChange else { return nil }
+        return (logs, selected)
+    }
+
+    private func rebuildLogIndex() {
+        var next: [UUID: Int] = [:]
+        next.reserveCapacity(logs.count)
+        for (index, entry) in logs.enumerated() {
+            next[entry.id] = index
+        }
+        logIndexByID = next
+    }
+
+    private func makeEntry(level: UInt8, line: String) -> ProxyLogEntry? {
+        if line.contains("proxy listening")
+            || line.contains("shutdown signal received")
+            || line.contains("shutdown channel closed")
+            || line.contains("CONNECT")
+            || line.contains("request failed")
+        {
+            return nil
+        }
+
+        let event: String
+        if line.contains("cert_portal") {
+            event = "cert_portal"
+        } else if line.contains("map_local") {
+            event = "map_local"
+        } else if line.contains("upstream") {
+            event = "upstream"
+        } else {
+            return nil
+        }
+
+        guard let url = Self.firstCapture(Self.urlRegex, in: line) else {
+            return nil
+        }
+
+        let method = Self.firstCapture(Self.methodRegex, in: line) ?? "HTTP"
+        let statusCode = Self.firstCapture(Self.statusRegex, in: line)
+            ?? Self.firstCapture(Self.responseStatusRegex, in: line)
+        let peer = Self.firstCapture(Self.peerRegex, in: line)
+        let mapLocal = Self.firstCapture(Self.mapLocalRegex, in: line)
+
+        return ProxyLogEntry(
+            id: UUID(),
+            timestamp: Date(),
+            level: level,
+            levelLabel: levelLabel(for: level),
+            event: event,
+            method: method,
+            url: url,
+            statusCode: statusCode,
+            peer: peer,
+            mapLocalMatcher: mapLocal,
+            requestHeaders: nil,
+            responseHeaders: nil,
+            requestBodyPreview: nil,
+            responseBodyPreview: nil,
+            rawLine: line
+        )
+    }
+
+    // Returns nil when line is not metadata.
+    // Returns false when line is metadata but no visible log row changed.
+    // Returns true when line is metadata and an existing visible log row changed.
+    private func handleMetadataLog(_ line: String) -> Bool? {
+        if line.contains("request_headers") {
+            guard
+                let peer = Self.firstCapture(Self.peerRegex, in: line),
+                let method = Self.firstCapture(Self.methodRegex, in: line),
+                let url = Self.firstCapture(Self.urlRegex, in: line),
+                let headersB64 = Self.firstCapture(Self.headersB64Regex, in: line)
+            else {
+                return false
+            }
+            let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
+            let key = transactionKey(peer: peer, method: method, url: url)
+            return applyMetadata(PendingTransactionMeta(requestHeaders: decoded), toKey: key)
+        }
+
+        if line.contains("response_headers") {
+            guard
+                let peer = Self.firstCapture(Self.peerRegex, in: line),
+                let method = Self.firstCapture(Self.methodRegex, in: line),
+                let url = Self.firstCapture(Self.urlRegex, in: line),
+                let headersB64 = Self.firstCapture(Self.headersB64Regex, in: line)
+            else {
+                return false
+            }
+            let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
+            let key = transactionKey(peer: peer, method: method, url: url)
+            return applyMetadata(PendingTransactionMeta(responseHeaders: decoded), toKey: key)
+        }
+
+        if line.contains("body inspection") {
+            guard
+                let peer = Self.firstCapture(Self.peerRegex, in: line),
+                let method = Self.firstCapture(Self.methodRegex, in: line),
+                let url = Self.firstCapture(Self.urlRegex, in: line),
+                let direction = Self.firstCapture(Self.directionRegex, in: line),
+                let sampleB64 = Self.firstCapture(Self.sampleB64Regex, in: line)
+            else {
+                return false
+            }
+
+            let preview = decodeBodyPreview(sampleB64)
+            let key = transactionKey(peer: peer, method: method, url: url)
+            if direction == "request" {
+                return applyMetadata(PendingTransactionMeta(requestBodyPreview: preview), toKey: key)
+            }
+            if direction == "response" {
+                return applyMetadata(PendingTransactionMeta(responseBodyPreview: preview), toKey: key)
+            }
+            return false
+        }
+
+        return nil
+    }
+
+    private func transactionKey(peer: String?, method: String, url: String) -> String {
+        "\(peer ?? "-")|\(method)|\(url)"
+    }
+
+    private func applyMetadata(_ meta: PendingTransactionMeta, toKey key: String) -> Bool {
+        guard !meta.isEmpty else { return false }
+
+        if let entryID = latestLogIDByKey[key],
+           let index = logIndexByID[entryID],
+           logs.indices.contains(index)
+        {
+            var entry = logs[index]
+            apply(meta: meta, to: &entry)
+            logs[index] = entry
+            return true
+        }
+
+        var pending = pendingMetaByKey[key] ?? PendingTransactionMeta()
+        pending.merge(meta)
+        pendingMetaByKey[key] = pending
+        return false
+    }
+
+    private func apply(meta: PendingTransactionMeta, to entry: inout ProxyLogEntry) {
+        if let value = meta.requestHeaders { entry.requestHeaders = value }
+        if let value = meta.responseHeaders { entry.responseHeaders = value }
+        if let value = meta.requestBodyPreview { entry.requestBodyPreview = value }
+        if let value = meta.responseBodyPreview { entry.responseBodyPreview = value }
+    }
+
+    private func decodeBase64Text(_ value: String) -> String? {
+        guard let data = Data(base64Encoded: value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func decodeBodyPreview(_ value: String) -> String? {
+        guard let data = Data(base64Encoded: value), !data.isEmpty else { return nil }
+        return prettyBodyText(from: data)
+    }
+
+    private func prettyBodyText(from data: Data) -> String {
+        if let prettyJSON = prettyJSONString(from: data) {
+            return prettyJSON
+        }
+        if let utf8 = String(data: data, encoding: .utf8) {
+            return utf8
+        }
+
+        let bytes = Array(data.prefix(256))
+        let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+        return "<binary \(data.count) bytes>\n\(hex)"
+    }
+
+    private func prettyJSONString(from data: Data) -> String? {
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []) else {
+            return nil
+        }
+        guard JSONSerialization.isValidJSONObject(jsonObject) else { return nil }
+        guard let prettyData = try? JSONSerialization.data(withJSONObject: jsonObject, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+        return String(data: prettyData, encoding: .utf8)
+    }
+
+    private static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func trimmed(_ value: String) -> String {
+        Self.trimmed(value)
+    }
+
+    private func levelLabel(for level: UInt8) -> String {
+        switch level {
+        case 4:
+            return "ERROR"
+        case 3:
+            return "WARN"
+        case 1:
+            return "DEBUG"
+        case 0:
+            return "TRACE"
+        default:
+            return "INFO"
+        }
+    }
+
+    private static let urlRegex = try! NSRegularExpression(pattern: #"url=([^\s]+)"#)
+    private static let methodRegex = try! NSRegularExpression(pattern: #"method=([A-Z]+)"#)
+    private static let statusRegex = try! NSRegularExpression(pattern: #"status=([0-9]{3})"#)
+    private static let responseStatusRegex = try! NSRegularExpression(
+        pattern: #"response_status=Some\(([0-9]{3})(?:[^\)]*)\)"#
+    )
+    private static let peerRegex = try! NSRegularExpression(pattern: #"peer=([^\s]+)"#)
+    private static let mapLocalRegex = try! NSRegularExpression(pattern: #"map_local=([^\s]+)"#)
+    private static let headersB64Regex = try! NSRegularExpression(pattern: #"headers_b64=([A-Za-z0-9+/=]+)"#)
+    private static let sampleB64Regex = try! NSRegularExpression(pattern: #"sample_b64=([A-Za-z0-9+/=]+)"#)
+    private static let directionRegex = try! NSRegularExpression(pattern: #"direction=([a-z]+)"#)
+
+    private static func firstCapture(_ regex: NSRegularExpression, in text: String) -> String? {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges > 1
+        else { return nil }
+        guard let captureRange = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[captureRange])
+    }
+}

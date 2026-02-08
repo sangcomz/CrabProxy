@@ -8,27 +8,41 @@
 
 /* Begin PBXBuildFile section */
 		41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */; };
+		50D48D2D50273FE78273AC0B /* ProxyRuleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07516C25B123D5E8595890B0 /* ProxyRuleManager.swift */; };
 		5D64D8A66477A972D3E95AA6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */; };
+		75F4F39CE17404C2C2F43DB1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B578BBA9CB36B6FF2FE141 /* SettingsView.swift */; };
 		851870D04BF7EE6B5DD21B24 /* RustProxyEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7D4E6ADF8B617AEDC0F5CF /* RustProxyEngine.swift */; };
 		8AAB6707300C3C11867DFA86 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2161575BBD4731EAB29E637C /* Security.framework */; };
 		9D691C5A6DE8BBBC461F9A1F /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55505981D7C9E4433F783A95 /* CoreFoundation.framework */; };
+		A40415D76F3EB84C71694682 /* ProxyLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40522E646FCB034700B1C13B /* ProxyLogStore.swift */; };
+		BC70968A3DCEB65D4FBED5B7 /* CrabTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809B137EBBC6E34E192A977C /* CrabTheme.swift */; };
+		C66E70F5C1E3DE1CE0079078 /* ProxyRuleModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0199009F5ADDA57CAE7B3ADB /* ProxyRuleModels.swift */; };
 		CD3EAA3F2868BFF19B8CF9EA /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51ABE9A6D9D984BDB517173D /* ProxyViewModel.swift */; };
 		DEFFE37EE0C9D4730D0AA8F6 /* CrabProxyMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */; };
+		F122E7F0EE979A9099B053E0 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C26226EB5A916FD1E4B2BC /* Components.swift */; };
 		F37AA31AA7D67D9FE36F653C /* AppAppearanceMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */; };
+		F3F2547EF444F5A2F9277945 /* NetworkInterfaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */; };
 		FC7EFE13336BA2CD0CDFF5F2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA3842B2A162E3765D5A417 /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0199009F5ADDA57CAE7B3ADB /* ProxyRuleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyRuleModels.swift; sourceTree = "<group>"; };
+		05B578BBA9CB36B6FF2FE141 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearanceMode.swift; sourceTree = "<group>"; };
+		07516C25B123D5E8595890B0 /* ProxyRuleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyRuleManager.swift; sourceTree = "<group>"; };
 		0BA3842B2A162E3765D5A417 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2161575BBD4731EAB29E637C /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSystemProxyService.swift; sourceTree = "<group>"; };
 		3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrabProxyMacApp.swift; sourceTree = "<group>"; };
+		40522E646FCB034700B1C13B /* ProxyLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyLogStore.swift; sourceTree = "<group>"; };
 		51ABE9A6D9D984BDB517173D /* ProxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyViewModel.swift; sourceTree = "<group>"; };
 		55505981D7C9E4433F783A95 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
+		809B137EBBC6E34E192A977C /* CrabTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrabTheme.swift; sourceTree = "<group>"; };
 		9A7D4E6ADF8B617AEDC0F5CF /* RustProxyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustProxyEngine.swift; sourceTree = "<group>"; };
+		B8C26226EB5A916FD1E4B2BC /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		DB162EFAACD0077B3CAE9CD9 /* CrabProxyMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrabProxyMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaceService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -74,11 +88,18 @@
 			children = (
 				05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */,
 				1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */,
+				B8C26226EB5A916FD1E4B2BC /* Components.swift */,
 				0BA3842B2A162E3765D5A417 /* ContentView.swift */,
 				3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */,
+				809B137EBBC6E34E192A977C /* CrabTheme.swift */,
 				367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */,
+				E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */,
+				40522E646FCB034700B1C13B /* ProxyLogStore.swift */,
+				07516C25B123D5E8595890B0 /* ProxyRuleManager.swift */,
+				0199009F5ADDA57CAE7B3ADB /* ProxyRuleModels.swift */,
 				51ABE9A6D9D984BDB517173D /* ProxyViewModel.swift */,
 				9A7D4E6ADF8B617AEDC0F5CF /* RustProxyEngine.swift */,
+				05B578BBA9CB36B6FF2FE141 /* SettingsView.swift */,
 			);
 			path = CrabProxyMacApp;
 			sourceTree = "<group>";
@@ -187,11 +208,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				F37AA31AA7D67D9FE36F653C /* AppAppearanceMode.swift in Sources */,
+				F122E7F0EE979A9099B053E0 /* Components.swift in Sources */,
 				FC7EFE13336BA2CD0CDFF5F2 /* ContentView.swift in Sources */,
 				DEFFE37EE0C9D4730D0AA8F6 /* CrabProxyMacApp.swift in Sources */,
+				BC70968A3DCEB65D4FBED5B7 /* CrabTheme.swift in Sources */,
 				41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */,
+				F3F2547EF444F5A2F9277945 /* NetworkInterfaceService.swift in Sources */,
+				A40415D76F3EB84C71694682 /* ProxyLogStore.swift in Sources */,
+				50D48D2D50273FE78273AC0B /* ProxyRuleManager.swift in Sources */,
+				C66E70F5C1E3DE1CE0079078 /* ProxyRuleModels.swift in Sources */,
 				CD3EAA3F2868BFF19B8CF9EA /* ProxyViewModel.swift in Sources */,
 				851870D04BF7EE6B5DD21B24 /* RustProxyEngine.swift in Sources */,
+				75F4F39CE17404C2C2F43DB1 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -249,12 +277,12 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Crab Proxy";
-				INFOPLIST_KEY_CFBundleName = "Crab Proxy";
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../crab-mitm/include",
 				);
+				INFOPLIST_KEY_CFBundleDisplayName = "Crab Proxy";
+				INFOPLIST_KEY_CFBundleName = "Crab Proxy";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LIBRARY_SEARCH_PATHS = (
@@ -263,6 +291,7 @@
 					"$(SRCROOT)/../crab-mitm/target/debug",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				OTHER_LDFLAGS = (
@@ -271,13 +300,12 @@
 					"-liconv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.sangcomz.CrabProxyMacApp;
-				PRODUCT_NAME = "Crab Proxy";
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OBJC_BRIDGING_HEADER = "Xcode/CrabProxyMacApp-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
-				MARKETING_VERSION = 1.0.0;
 			};
 			name = Release;
 		};
@@ -338,12 +366,12 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Crab Proxy";
-				INFOPLIST_KEY_CFBundleName = "Crab Proxy";
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../crab-mitm/include",
 				);
+				INFOPLIST_KEY_CFBundleDisplayName = "Crab Proxy";
+				INFOPLIST_KEY_CFBundleName = "Crab Proxy";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LIBRARY_SEARCH_PATHS = (
@@ -352,6 +380,7 @@
 					"$(SRCROOT)/../crab-mitm/target/debug",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -361,13 +390,12 @@
 					"-liconv",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.sangcomz.CrabProxyMacApp;
-				PRODUCT_NAME = "Crab Proxy";
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OBJC_BRIDGING_HEADER = "Xcode/CrabProxyMacApp-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
-				MARKETING_VERSION = 1.0.0;
 			};
 			name = Debug;
 		};

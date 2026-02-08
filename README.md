@@ -57,11 +57,3 @@ Android: some apps ignore user CAs by default; browser/debug builds usually work
 - Internal CA files are managed automatically under:
   `~/Library/Application Support/CrabProxyMacApp/ca/`
 - Traffic list hides internal lifecycle logs (`start/stop`) and focuses on request traffic.
-
-## Refactoring Progress (Critical First)
-
-- ~~`S-01` CA private key write path hardened to create key files with owner-only permission (`0600`)~~
-- ~~`S-02` FFI log callback safety improved by removing raw-pointer `unsafe Send/Sync` assertion and clarifying callback lifetime contract~~
-- ~~`S-03` Swift callback bridge changed from unretained self pointer to retained callback context with explicit teardown~~
-- ~~`S-07` body spool directory/file creation hardened with private permissions (`0700` / `0600`)~~
-- ~~`P-01` `filteredLogs` changed from per-render computed sort/filter to cached published data rebuilt on data/filter changes~~
