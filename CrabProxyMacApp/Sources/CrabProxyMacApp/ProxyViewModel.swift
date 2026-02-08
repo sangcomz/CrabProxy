@@ -134,12 +134,15 @@ final class ProxyViewModel: ObservableObject {
     @Published var inspectBodies = true
     @Published var isRunning = false
     @Published var statusText = "Stopped"
-    @Published var visibleURLFilter = ""
+    @Published var visibleURLFilter = "" {
+        didSet { rebuildFilteredLogs() }
+    }
     @Published private(set) var macSystemProxyEnabled = false
     @Published private(set) var macSystemProxyServiceText = "Unknown"
     @Published private(set) var macSystemProxyStateText = "Unknown"
     @Published private(set) var isApplyingMacSystemProxy = false
     @Published private(set) var logs: [ProxyLogEntry] = []
+    @Published private(set) var filteredLogs: [ProxyLogEntry] = []
     @Published var selectedLogID: ProxyLogEntry.ID?
     @Published var allowRules: [AllowRuleInput] = []
     @Published var mapLocalRules: [MapLocalRuleInput] = []
@@ -172,22 +175,7 @@ final class ProxyViewModel: ObservableObject {
         } catch {
             self.statusText = "Init failed: \(error.localizedDescription)"
         }
-    }
-
-    var filteredLogs: [ProxyLogEntry] {
-        let ordered = logs.sorted { lhs, rhs in
-            if lhs.timestamp == rhs.timestamp {
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-            return lhs.timestamp < rhs.timestamp
-        }
-
-        let needle = trimmed(visibleURLFilter)
-        guard !needle.isEmpty else { return ordered }
-        return ordered.filter { entry in
-            entry.url.localizedCaseInsensitiveContains(needle)
-                || entry.rawLine.localizedCaseInsensitiveContains(needle)
-        }
+        rebuildFilteredLogs()
     }
 
     var selectedLog: ProxyLogEntry? {
@@ -259,6 +247,7 @@ final class ProxyViewModel: ObservableObject {
 
     func clearLogs() {
         logs.removeAll(keepingCapacity: true)
+        filteredLogs.removeAll(keepingCapacity: true)
         selectedLogID = nil
         pendingMetaByKey.removeAll(keepingCapacity: true)
         latestLogIDByKey.removeAll(keepingCapacity: true)
@@ -726,6 +715,8 @@ final class ProxyViewModel: ObservableObject {
             latestLogIDByKey = latestLogIDByKey.filter { !removedIDs.contains($0.value) }
         }
 
+        rebuildFilteredLogs()
+
         if selectedLogID == nil || logs.contains(where: { $0.id == selectedLogID }) == false {
             selectedLogID = logs.last?.id
         }
@@ -853,6 +844,7 @@ final class ProxyViewModel: ObservableObject {
             var entry = logs[index]
             apply(meta: meta, to: &entry)
             logs[index] = entry
+            updateFilteredLogEntry(entry)
             return
         }
 
@@ -876,6 +868,23 @@ final class ProxyViewModel: ObservableObject {
     private func decodeBodyPreview(_ value: String) -> String? {
         guard let data = Data(base64Encoded: value), !data.isEmpty else { return nil }
         return prettyBodyText(from: data)
+    }
+
+    private func rebuildFilteredLogs() {
+        let needle = trimmed(visibleURLFilter)
+        guard !needle.isEmpty else {
+            filteredLogs = logs
+            return
+        }
+        filteredLogs = logs.filter { entry in
+            entry.url.localizedCaseInsensitiveContains(needle)
+                || entry.rawLine.localizedCaseInsensitiveContains(needle)
+        }
+    }
+
+    private func updateFilteredLogEntry(_ entry: ProxyLogEntry) {
+        guard let index = filteredLogs.firstIndex(where: { $0.id == entry.id }) else { return }
+        filteredLogs[index] = entry
     }
 
     private func prettyBodyText(from data: Data) -> String {

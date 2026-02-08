@@ -35,8 +35,18 @@ struct StatusRewriteRuleConfig {
     var toStatusCode: UInt16
 }
 
+private final class RustLogCallbackContext {
+    weak var engine: RustProxyEngine?
+
+    init(engine: RustProxyEngine) {
+        self.engine = engine
+    }
+}
+
 final class RustProxyEngine {
     private var handle: OpaquePointer?
+    private var callbackContext: RustLogCallbackContext?
+    private var callbackUserData: UnsafeMutableRawPointer?
     var onLog: (@Sendable (UInt8, String) -> Void)?
 
     init(listenAddress: String) throws {
@@ -49,11 +59,21 @@ final class RustProxyEngine {
         }
         handle = raw
 
-        crab_set_log_callback(rustLogCallbackBridge, Unmanaged.passUnretained(self).toOpaque())
+        let callbackContext = RustLogCallbackContext(engine: self)
+        self.callbackContext = callbackContext
+        let userData = Unmanaged.passRetained(callbackContext).toOpaque()
+        callbackUserData = userData
+        crab_set_log_callback(rustLogCallbackBridge, userData)
     }
 
     deinit {
         crab_set_log_callback(nil, nil)
+        callbackContext?.engine = nil
+        if let userData = callbackUserData {
+            Unmanaged<RustLogCallbackContext>.fromOpaque(userData).release()
+            callbackUserData = nil
+        }
+
         if let h = handle {
             _ = crab_proxy_stop(h)
             crab_proxy_destroy(h)
@@ -224,7 +244,7 @@ private func rustLogCallbackBridge(
     _ message: UnsafePointer<CChar>?
 ) {
     guard let userData else { return }
-    let engine = Unmanaged<RustProxyEngine>.fromOpaque(userData).takeUnretainedValue()
+    let context = Unmanaged<RustLogCallbackContext>.fromOpaque(userData).takeUnretainedValue()
     let text = message.map { String(cString: $0) } ?? ""
-    engine.receiveLog(level: level, message: text)
+    context.engine?.receiveLog(level: level, message: text)
 }
