@@ -35,10 +35,55 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 mkdir -p "$RUST_DIR/target/debug" "$RUST_DIR/target/release"
 mkdir -p "$APP_DIR/Sources/CCrabMitm/include"
 
-if [[ "$PROFILE" == "release" ]]; then
-  cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib --release
-else
-  cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib
+# Xcode archive for macOS typically builds both arm64 and x86_64.
+# Build Rust staticlib per-arch and merge them as a universal archive.
+IFS=' ' read -r -a xcode_arches <<<"${ARCHS:-$(uname -m)}"
+rust_targets=()
+for arch in "${xcode_arches[@]}"; do
+  case "$arch" in
+    arm64)
+      rust_targets+=("aarch64-apple-darwin")
+      ;;
+    x86_64)
+      rust_targets+=("x86_64-apple-darwin")
+      ;;
+    *)
+      echo "warning: unsupported Xcode ARCH '$arch', skipping for Rust build" >&2
+      ;;
+  esac
+done
+
+if [[ ${#rust_targets[@]} -eq 0 ]]; then
+  echo "error: no supported Rust targets resolved from ARCHS='${ARCHS:-}'" >&2
+  exit 1
 fi
+
+if command -v rustup >/dev/null 2>&1; then
+  for target in "${rust_targets[@]}"; do
+    if ! rustup target list --installed | grep -qx "$target"; then
+      rustup target add "$target"
+    fi
+  done
+fi
+
+archives=()
+for target in "${rust_targets[@]}"; do
+  build_cmd=(cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib --target "$target")
+  if [[ "$PROFILE" == "release" ]]; then
+    build_cmd+=(--release)
+  fi
+  "${build_cmd[@]}"
+  archives+=("$RUST_DIR/target/$target/$PROFILE/libcrab_mitm.a")
+done
+
+OUTPUT_LIB="$RUST_DIR/target/$PROFILE/libcrab_mitm.a"
+if [[ ${#archives[@]} -eq 1 ]]; then
+  cp "${archives[0]}" "$OUTPUT_LIB"
+else
+  /usr/bin/lipo -create "${archives[@]}" -output "$OUTPUT_LIB"
+fi
+
+echo "Rust staticlib prepared at: $OUTPUT_LIB"
+/usr/bin/lipo -info "$OUTPUT_LIB" || true
 
 cp "$RUST_DIR/include/crab_mitm.h" "$APP_DIR/Sources/CCrabMitm/include/crab_mitm.h"

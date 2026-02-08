@@ -7,6 +7,8 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    static let uiOrder: [AppAppearanceMode] = [.light, .dark, .system]
+
     var title: String {
         switch self {
         case .system:
@@ -26,6 +28,17 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
             return .light
         case .dark:
             return .dark
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .system:
+            return "laptopcomputer"
+        case .light:
+            return "sun.max"
+        case .dark:
+            return "moon"
         }
     }
 }

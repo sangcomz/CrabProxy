@@ -12,8 +12,10 @@ struct CrabProxyMacApp: App {
 
     var body: some Scene {
         WindowGroup("Crab Proxy") {
-            ContentView(model: model)
-                .preferredColorScheme(appearanceMode.preferredColorScheme)
+            ContentView(
+                model: model,
+                appearanceModeRawValue: $appearanceModeRawValue
+            )
                 .onAppear {
                     applyAppAppearance()
                 }
@@ -21,21 +23,6 @@ struct CrabProxyMacApp: App {
                     applyAppAppearance()
                 }
         }
-
-        WindowGroup("Settings", id: "settings") {
-            SettingsView(
-                model: model,
-                appearanceModeRawValue: $appearanceModeRawValue
-            )
-            .preferredColorScheme(appearanceMode.preferredColorScheme)
-            .onAppear {
-                applyAppAppearance()
-            }
-            .onChange(of: appearanceModeRawValue) { _, _ in
-                applyAppAppearance()
-            }
-        }
-        .defaultSize(width: 1080, height: 700)
     }
 
     @MainActor

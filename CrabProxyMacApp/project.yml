@@ -8,6 +8,8 @@ options:
 settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.sangcomz.CrabProxyMacApp
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     SWIFT_OBJC_BRIDGING_HEADER: Xcode/CrabProxyMacApp-Bridging-Header.h
@@ -16,14 +18,17 @@ settings:
       - $(SRCROOT)/../crab-mitm/include
     LIBRARY_SEARCH_PATHS:
       - $(inherited)
-      - $(SRCROOT)/../crab-mitm/target/debug
       - $(SRCROOT)/../crab-mitm/target/release
+      - $(SRCROOT)/../crab-mitm/target/debug
     OTHER_LDFLAGS:
       - $(inherited)
       - -lcrab_mitm
       - -liconv
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: "Crab Proxy"
+    INFOPLIST_KEY_CFBundleName: "Crab Proxy"
     INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
     INFOPLIST_KEY_NSHighResolutionCapable: YES
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -46,7 +51,7 @@ targets:
       - sdk: CoreFoundation.framework
     settings:
       base:
-        PRODUCT_NAME: CrabProxyMacApp
+        PRODUCT_NAME: "Crab Proxy"
         SWIFT_EMIT_LOC_STRINGS: NO
 
 schemes:

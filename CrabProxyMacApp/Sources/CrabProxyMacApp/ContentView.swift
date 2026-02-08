@@ -3,9 +3,10 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var model: ProxyViewModel
+    @Binding var appearanceModeRawValue: String
+    @AppStorage("CrabProxyMacApp.currentScreen") private var currentScreenRawValue = MainScreen.traffic.rawValue
     @State private var animateBackground = false
     @State private var detailTab: DetailTab = .summary
-    @Environment(\.openWindow) private var openWindow
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -15,7 +16,7 @@ struct ContentView: View {
 
             VStack(spacing: 16) {
                 controlPanel
-                trafficSplitView
+                displayedContent
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
@@ -34,6 +35,7 @@ struct ContentView: View {
                 configureMainWindowAppearance(window)
             }
         )
+        .animation(.easeInOut(duration: 0.2), value: currentScreenRawValue)
         .tint(primaryTint)
     }
 
@@ -65,6 +67,23 @@ struct ContentView: View {
         CrabTheme.secondaryText(for: colorScheme)
     }
 
+    private var currentScreen: MainScreen {
+        MainScreen(rawValue: currentScreenRawValue) ?? .traffic
+    }
+
+    @ViewBuilder
+    private var displayedContent: some View {
+        switch currentScreen {
+        case .traffic:
+            trafficSplitView
+        case .settings:
+            SettingsView(
+                model: model,
+                appearanceModeRawValue: $appearanceModeRawValue
+            )
+        }
+    }
+
     private var controlPanel: some View {
         VStack(spacing: 12) {
             HStack(spacing: 14) {
@@ -86,9 +105,12 @@ struct ContentView: View {
                 .disabled(model.isApplyingMacSystemProxy || model.macSystemProxyStateText == "Unavailable")
 
                 Button {
-                    openWindow(id: "settings")
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        let nextScreen: MainScreen = (currentScreen == .traffic) ? .settings : .traffic
+                        currentScreenRawValue = nextScreen.rawValue
+                    }
                 } label: {
-                    Image(systemName: "gearshape.fill")
+                    Image(systemName: currentScreen == .traffic ? "gearshape.fill" : "chevron.left")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(primaryText)
                         .frame(width: 28, height: 28)
@@ -101,8 +123,8 @@ struct ContentView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open Settings")
-                .help("Open Settings")
+                .accessibilityLabel(currentScreen == .traffic ? "Open Settings" : "Back to Traffic")
+                .help(currentScreen == .traffic ? "Open Settings" : "Back to Traffic")
 
                 Spacer()
 
@@ -338,30 +360,77 @@ struct ContentView: View {
     }
 }
 
+private enum MainScreen: String {
+    case traffic
+    case settings
+}
+
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case general = "General"
+    case rules = "Rules"
+    case device = "Mobile"
+
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
     @ObservedObject var model: ProxyViewModel
     @Binding var appearanceModeRawValue: String
+    @AppStorage("CrabProxyMacApp.settingsTab") private var selectedTabRawValue = SettingsTab.general.rawValue
     @Environment(\.colorScheme) private var colorScheme
 
+    private var selectedTab: SettingsTab {
+        SettingsTab(rawValue: selectedTabRawValue) ?? .general
+    }
+
+    private var selectedTabBinding: Binding<SettingsTab> {
+        Binding(
+            get: { selectedTab },
+            set: { selectedTabRawValue = $0.rawValue }
+        )
+    }
+
     var body: some View {
-        TabView {
-            GeneralSettingsView(appearanceModeRawValue: $appearanceModeRawValue)
-                .tabItem {
-                    Label("General", systemImage: "gearshape")
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Text("Settings")
+                    .font(.custom("Avenir Next Demi Bold", size: 20))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-            RulesSettingsView(model: model)
-                .tabItem {
-                    Label("Rules", systemImage: "slider.horizontal.3")
-                }
+                Spacer()
 
-            DeviceSetupView(model: model)
-                .tabItem {
-                    Label("Device", systemImage: "iphone.and.arrow.forward")
+                Picker("Settings Tab", selection: selectedTabBinding) {
+                    ForEach(SettingsTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .frame(width: 360)
+            }
+
+            Group {
+                switch selectedTab {
+                case .general:
+                    GeneralSettingsView(appearanceModeRawValue: $appearanceModeRawValue)
+                case .rules:
+                    RulesSettingsView(model: model)
+                case .device:
+                    DeviceSetupView(model: model)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(CrabTheme.panelFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
         .tint(CrabTheme.primaryTint(for: colorScheme))
-        .frame(minWidth: 1080, minHeight: 700)
     }
 }
 
@@ -377,42 +446,103 @@ struct GeneralSettingsView: View {
     }
 
     var body: some View {
-        ZStack {
-            ProxyBackground(animateBackground: true)
-                .ignoresSafeArea()
-
+        ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text("General")
-                    .font(.custom("Avenir Next Demi Bold", size: 28))
+                    .font(.custom("Avenir Next Demi Bold", size: 24))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Appearance")
-                        .font(.custom("Avenir Next Demi Bold", size: 16))
-                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
-
-                    Text("Choose how Crab Proxy Studio looks.")
-                        .font(.custom("Avenir Next Medium", size: 13))
-                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
-
-                    Picker("", selection: appearanceModeBinding) {
-                        ForEach(AppAppearanceMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 360)
-                }
-                .padding(14)
-                .background(GlassCard())
-
-                Spacer()
+                ThemeModeRow(selection: appearanceModeBinding)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 980, minHeight: 620)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct ThemeModeRow: View {
+    @Binding var selection: AppAppearanceMode
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Theme")
+                    .font(.custom("Avenir Next Demi Bold", size: 20))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                Text("Use light, dark, or match your system")
+                    .font(.custom("Avenir Next Medium", size: 13))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 6) {
+                ForEach(AppAppearanceMode.uiOrder, id: \.id) { mode in
+                    ThemeModeChip(
+                        mode: mode,
+                        isSelected: selection == mode
+                    ) {
+                        selection = mode
+                    }
+                }
+            }
+            .padding(4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(CrabTheme.themePickerTrayFill(for: colorScheme))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
+                    )
+            )
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CrabTheme.themeCardFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct ThemeModeChip: View {
+    let mode: AppAppearanceMode
+    let isSelected: Bool
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: mode.symbolName)
+                    .font(.system(size: 14, weight: .medium))
+                Text(mode.title)
+                    .font(.custom("Avenir Next Demi Bold", size: 12))
+            }
+            .foregroundStyle(
+                isSelected
+                    ? CrabTheme.themeChipSelectedText(for: colorScheme)
+                    : CrabTheme.secondaryText(for: colorScheme)
+            )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(
+                        isSelected
+                            ? CrabTheme.themeChipSelectedFill(for: colorScheme)
+                            : Color.clear
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -421,28 +551,23 @@ struct RulesSettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ZStack {
-            ProxyBackground(animateBackground: true)
-                .ignoresSafeArea()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Rules Settings")
+                    .font(.custom("Avenir Next Demi Bold", size: 24))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Rules Settings")
-                        .font(.custom("Avenir Next Demi Bold", size: 28))
-                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                Text("Allowlist / Map Local / Status Rewrite rules are applied when you press Start.")
+                    .font(.custom("Avenir Next Medium", size: 13))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
-                    Text("Allowlist / Map Local / Status Rewrite rules are applied when you press Start.")
-                        .font(.custom("Avenir Next Medium", size: 13))
-                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
-
-                    allowListSection
-                    mapLocalSection
-                    statusRewriteSection
-                }
-                .padding(20)
+                allowListSection
+                mapLocalSection
+                statusRewriteSection
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 980, minHeight: 620)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var allowListSection: some View {
@@ -613,27 +738,22 @@ struct DeviceSetupView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ZStack {
-            ProxyBackground(animateBackground: true)
-                .ignoresSafeArea()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Mobile Setup")
+                    .font(.custom("Avenir Next Demi Bold", size: 24))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Device Setup")
-                        .font(.custom("Avenir Next Demi Bold", size: 28))
-                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                Text("Use this page for mobile proxy IP and certificate portal.")
+                    .font(.custom("Avenir Next Medium", size: 13))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
-                    Text("Use this page for mobile proxy IP and certificate portal.")
-                        .font(.custom("Avenir Next Medium", size: 13))
-                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
-
-                    proxySection
-                    certPortalSection
-                }
-                .padding(20)
+                proxySection
+                certPortalSection
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 980, minHeight: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var proxySection: some View {
@@ -1029,7 +1149,7 @@ private enum CrabTheme {
         case .light:
             return Color(red: 0.93, green: 0.39, blue: 0.12)
         case .dark:
-            return Color(red: 0.79, green: 0.40, blue: 0.17)
+            return Color(red: 0.90, green: 0.49, blue: 0.21)
         @unknown default:
             return Color(red: 0.93, green: 0.39, blue: 0.12)
         }
@@ -1040,7 +1160,7 @@ private enum CrabTheme {
         case .light:
             return Color(red: 0.98, green: 0.66, blue: 0.25)
         case .dark:
-            return Color(red: 0.62, green: 0.35, blue: 0.16)
+            return Color(red: 0.82, green: 0.52, blue: 0.26)
         @unknown default:
             return Color(red: 0.98, green: 0.66, blue: 0.25)
         }
@@ -1175,6 +1295,50 @@ private enum CrabTheme {
             return Color.black.opacity(0.23)
         @unknown default:
             return Color.white.opacity(0.74)
+        }
+    }
+
+    static func themeCardFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.76)
+        case .dark:
+            return Color.white.opacity(0.06)
+        @unknown default:
+            return Color.white.opacity(0.76)
+        }
+    }
+
+    static func themePickerTrayFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return Color.white.opacity(0.82)
+        case .dark:
+            return Color.black.opacity(0.28)
+        @unknown default:
+            return Color.white.opacity(0.82)
+        }
+    }
+
+    static func themeChipSelectedFill(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return primaryTint(for: scheme)
+        case .dark:
+            return primaryTint(for: scheme).opacity(0.9)
+        @unknown default:
+            return primaryTint(for: scheme)
+        }
+    }
+
+    static func themeChipSelectedText(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .light:
+            return .white
+        case .dark:
+            return Color.white.opacity(0.98)
+        @unknown default:
+            return .white
         }
     }
 
