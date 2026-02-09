@@ -7,7 +7,9 @@ struct ContentView: View {
     @AppStorage("CrabProxyMacApp.currentScreen") private var currentScreenRawValue = MainScreen.traffic.rawValue
     @State private var animateBackground = false
     @State private var detailTab: DetailTab = .summary
+    @State private var isTrafficListAtTop = true
     @Environment(\.colorScheme) private var colorScheme
+    private let trafficTopAnchorID = "traffic-list-top-anchor"
 
     var body: some View {
         ZStack {
@@ -69,6 +71,10 @@ struct ContentView: View {
 
     private var currentScreen: MainScreen {
         MainScreen(rawValue: currentScreenRawValue) ?? .traffic
+    }
+
+    private var displayedTrafficLogs: [ProxyLogEntry] {
+        Array(model.filteredLogs.reversed())
     }
 
     @ViewBuilder
@@ -223,22 +229,44 @@ struct ContentView: View {
                 text: $model.visibleURLFilter
             )
 
-            List(selection: $model.selectedLogID) {
-                ForEach(model.filteredLogs) { entry in
-                    TransactionRow(entry: entry)
-                        .tag(entry.id)
-                        .listRowBackground(Color.clear)
+            ScrollViewReader { scrollProxy in
+                ZStack(alignment: .bottomTrailing) {
+                    List(selection: $model.selectedLogID) {
+                        TrafficListTopMarker(isAtTop: $isTrafficListAtTop)
+                            .id(trafficTopAnchorID)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+
+                        ForEach(displayedTrafficLogs) { entry in
+                            TransactionRow(entry: entry)
+                                .tag(entry.id)
+                                .listRowBackground(Color.clear)
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if !isTrafficListAtTop && !displayedTrafficLogs.isEmpty {
+                        ScrollToLatestButton {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                scrollProxy.scrollTo(trafficTopAnchorID, anchor: .top)
+                            }
+                        }
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Color.clear)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay {
-                if model.filteredLogs.isEmpty {
-                    Text("No matching requests")
-                        .font(.custom("Avenir Next Medium", size: 14))
-                        .foregroundStyle(secondaryText)
+                .animation(.easeInOut(duration: 0.18), value: isTrafficListAtTop)
+                .overlay {
+                    if displayedTrafficLogs.isEmpty {
+                        Text("No matching requests")
+                            .font(.custom("Avenir Next Medium", size: 14))
+                            .foregroundStyle(secondaryText)
+                    }
                 }
             }
         }
@@ -315,7 +343,11 @@ struct ContentView: View {
                 .foregroundStyle(primaryText.opacity(0.86))
                 .padding(.top, 4)
 
-            CodeBlock(text: entry.rawLine, placeholder: "No raw log")
+            CodeBlock(
+                text: formattedRawLog(entry.rawLine),
+                placeholder: "No raw log",
+                copyButtonLabel: "Copy Raw Log"
+            )
         }
     }
 
@@ -324,7 +356,7 @@ struct ContentView: View {
             Text("Request Headers")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
                 .foregroundStyle(primaryText.opacity(0.9))
-            CodeBlock(
+            HeaderBlock(
                 text: entry.requestHeaders,
                 placeholder: "No captured request headers"
             )
@@ -332,7 +364,7 @@ struct ContentView: View {
             Text("Response Headers")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
                 .foregroundStyle(primaryText.opacity(0.9))
-            CodeBlock(
+            HeaderBlock(
                 text: entry.responseHeaders,
                 placeholder: "No captured response headers"
             )
@@ -344,7 +376,7 @@ struct ContentView: View {
             Text("Request Body")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
                 .foregroundStyle(primaryText.opacity(0.9))
-            CodeBlock(
+            BodyBlock(
                 text: entry.requestBodyPreview,
                 placeholder: "No captured request body preview"
             )
@@ -352,17 +384,98 @@ struct ContentView: View {
             Text("Response Body")
                 .font(.custom("Avenir Next Demi Bold", size: 12))
                 .foregroundStyle(primaryText.opacity(0.9))
-            CodeBlock(
+            BodyBlock(
                 text: entry.responseBodyPreview,
                 placeholder: "No captured response body preview"
             )
         }
+    }
+
+    private func formattedRawLog(_ rawLine: String) -> String {
+        guard let marker = rawLine.range(of: "CRAB_JSON ") else {
+            return rawLine
+        }
+
+        let prefix = rawLine[..<marker.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        let jsonText = rawLine[marker.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jsonText.isEmpty, let data = jsonText.data(using: .utf8) else {
+            return rawLine
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data, options: []) else {
+            return rawLine
+        }
+        guard JSONSerialization.isValidJSONObject(object) else {
+            return rawLine
+        }
+        guard
+            let prettyData = try? JSONSerialization.data(
+                withJSONObject: object,
+                options: [.prettyPrinted, .sortedKeys]
+            ),
+            let prettyJSON = String(data: prettyData, encoding: .utf8)
+        else {
+            return rawLine
+        }
+
+        if prefix.isEmpty {
+            return "CRAB_JSON\n\(prettyJSON)"
+        }
+        return "\(prefix)\nCRAB_JSON\n\(prettyJSON)"
     }
 }
 
 private enum MainScreen: String {
     case traffic
     case settings
+}
+
+private struct TrafficListTopMarker: View {
+    @Binding var isAtTop: Bool
+
+    var body: some View {
+        Color.clear
+            .frame(height: 1)
+            .allowsHitTesting(false)
+            .onAppear {
+                DispatchQueue.main.async {
+                    isAtTop = true
+                }
+            }
+            .onDisappear {
+                DispatchQueue.main.async {
+                    isAtTop = false
+                }
+            }
+    }
+}
+
+private struct ScrollToLatestButton: View {
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.to.line")
+                    .font(.system(size: 11, weight: .bold))
+                Text("Top")
+                    .font(.custom("Avenir Next Demi Bold", size: 11))
+            }
+            .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(CrabTheme.softFill(for: colorScheme))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Scroll to latest traffic")
+    }
 }
 
 private enum DetailTab: String, CaseIterable, Identifiable {

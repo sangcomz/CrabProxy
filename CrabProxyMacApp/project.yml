@@ -8,7 +8,7 @@ options:
 settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.sangcomz.CrabProxyMacApp
-    MARKETING_VERSION: "1.0.0"
+    MARKETING_VERSION: "1.1.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -18,8 +18,6 @@ settings:
       - $(SRCROOT)/../crab-mitm/include
     LIBRARY_SEARCH_PATHS:
       - $(inherited)
-      - $(SRCROOT)/../crab-mitm/target/release
-      - $(SRCROOT)/../crab-mitm/target/debug
     OTHER_LDFLAGS:
       - $(inherited)
       - -lcrab_mitm
@@ -33,6 +31,17 @@ settings:
     INFOPLIST_KEY_NSHighResolutionCapable: YES
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  configs:
+    Debug:
+      LIBRARY_SEARCH_PATHS:
+        - $(inherited)
+        - $(SRCROOT)/../crab-mitm/target/debug
+        - $(SRCROOT)/../crab-mitm/target/release
+    Release:
+      LIBRARY_SEARCH_PATHS:
+        - $(inherited)
+        - $(SRCROOT)/../crab-mitm/target/release
+        - $(SRCROOT)/../crab-mitm/target/debug
 
 targets:
   CrabProxyMacApp:

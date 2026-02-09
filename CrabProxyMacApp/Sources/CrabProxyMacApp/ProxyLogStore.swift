@@ -5,6 +5,7 @@ struct ProxyLogEntry: Identifiable, Hashable {
     let timestamp: Date
     let level: UInt8
     let levelLabel: String
+    let correlationKey: String
     let event: String
     let method: String
     let url: String
@@ -82,15 +83,8 @@ final class ProxyLogStore {
             }
         }
 
-        if let metadataUpdated = handleMetadataLog(trimmedLine) {
-            if metadataUpdated {
-                return (logs, currentSelectedLogID)
-            }
-            return nil
-        }
-
-        guard let entry = makeEntry(level: level, line: trimmedLine) else { return nil }
-        return appendEntry(entry, currentSelectedLogID: currentSelectedLogID)
+        // Prefer structured CRAB_JSON logs to avoid duplicate plain+JSON rows.
+        return nil
     }
 
     func appendBatch(
@@ -127,7 +121,7 @@ final class ProxyLogStore {
     }
 
     private func appendEntry(_ entry: ProxyLogEntry, currentSelectedLogID: ProxyLogEntry.ID?) -> (logs: [ProxyLogEntry], selectedLogID: ProxyLogEntry.ID?) {
-        let key = transactionKey(peer: entry.peer, method: entry.method, url: entry.url)
+        let key = entry.correlationKey
         var materialized = entry
         if let pending = pendingMetaByKey.removeValue(forKey: key) {
             apply(meta: pending, to: &materialized)
@@ -181,12 +175,20 @@ final class ProxyLogStore {
             let status = statusField(in: object)
             let peer = stringField("peer", in: object)
             let mapLocal = stringField("map_local", in: object)
+            let requestID = stringField("request_id", in: object)
+            let correlationKey = transactionKey(
+                requestID: requestID,
+                peer: peer,
+                method: method,
+                url: url
+            )
             return .entry(
                 ProxyLogEntry(
                     id: UUID(),
                     timestamp: Date(),
                     level: level,
                     levelLabel: levelLabel(for: level),
+                    correlationKey: correlationKey,
                     event: event,
                     method: method,
                     url: url,
@@ -210,16 +212,22 @@ final class ProxyLogStore {
             else {
                 return .ignore
             }
-            let key = transactionKey(peer: peer, method: method, url: url)
+            let requestID = stringField("request_id", in: object)
+            let key = transactionKey(
+                requestID: requestID,
+                peer: peer,
+                method: method,
+                url: url
+            )
 
             switch event {
             case "request_headers":
                 let headersB64 = stringField("headers_b64", in: object) ?? ""
-                let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
+                let decoded = decodeHeaderPreview(headersB64) ?? "<failed to decode headers>"
                 return .metadata(key: key, meta: PendingTransactionMeta(requestHeaders: decoded))
             case "response_headers":
                 let headersB64 = stringField("headers_b64", in: object) ?? ""
-                let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
+                let decoded = decodeHeaderPreview(headersB64) ?? "<failed to decode headers>"
                 return .metadata(key: key, meta: PendingTransactionMeta(responseHeaders: decoded))
             case "body_inspection":
                 let direction = stringField("direction", in: object) ?? ""
@@ -295,6 +303,7 @@ final class ProxyLogStore {
         let statusCode = Self.firstCapture(Self.statusRegex, in: line)
             ?? Self.firstCapture(Self.responseStatusRegex, in: line)
         let peer = Self.firstCapture(Self.peerRegex, in: line)
+        let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
         let mapLocal = Self.firstCapture(Self.mapLocalRegex, in: line)
 
         return ProxyLogEntry(
@@ -302,6 +311,7 @@ final class ProxyLogStore {
             timestamp: Date(),
             level: level,
             levelLabel: levelLabel(for: level),
+            correlationKey: transactionKey(requestID: requestID, peer: peer, method: method, url: url),
             event: event,
             method: method,
             url: url,
@@ -330,7 +340,8 @@ final class ProxyLogStore {
                 return false
             }
             let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
-            let key = transactionKey(peer: peer, method: method, url: url)
+            let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
+            let key = transactionKey(requestID: requestID, peer: peer, method: method, url: url)
             return applyMetadata(PendingTransactionMeta(requestHeaders: decoded), toKey: key)
         }
 
@@ -344,7 +355,8 @@ final class ProxyLogStore {
                 return false
             }
             let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
-            let key = transactionKey(peer: peer, method: method, url: url)
+            let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
+            let key = transactionKey(requestID: requestID, peer: peer, method: method, url: url)
             return applyMetadata(PendingTransactionMeta(responseHeaders: decoded), toKey: key)
         }
 
@@ -360,7 +372,8 @@ final class ProxyLogStore {
             }
 
             let preview = decodeBodyPreview(sampleB64)
-            let key = transactionKey(peer: peer, method: method, url: url)
+            let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
+            let key = transactionKey(requestID: requestID, peer: peer, method: method, url: url)
             if direction == "request" {
                 return applyMetadata(PendingTransactionMeta(requestBodyPreview: preview), toKey: key)
             }
@@ -373,8 +386,11 @@ final class ProxyLogStore {
         return nil
     }
 
-    private func transactionKey(peer: String?, method: String, url: String) -> String {
-        "\(peer ?? "-")|\(method)|\(url)"
+    private func transactionKey(requestID: String?, peer: String?, method: String, url: String) -> String {
+        if let requestID, !requestID.isEmpty {
+            return "id|\(requestID)"
+        }
+        return "\(peer ?? "-")|\(method)|\(url)"
     }
 
     private func applyMetadata(_ meta: PendingTransactionMeta, toKey key: String) -> Bool {
@@ -406,6 +422,33 @@ final class ProxyLogStore {
     private func decodeBase64Text(_ value: String) -> String? {
         guard let data = Data(base64Encoded: value) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    private func decodeHeaderPreview(_ value: String) -> String? {
+        guard let decoded = decodeBase64Text(value) else { return nil }
+        return normalizeHeaderPreview(decoded)
+    }
+
+    private func normalizeHeaderPreview(_ raw: String) -> String {
+        let normalized = raw
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                guard let separator = trimmed.firstIndex(of: ":") else {
+                    return trimmed
+                }
+
+                let key = trimmed[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+                let valueStart = trimmed.index(after: separator)
+                let value = trimmed[valueStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+                if value.isEmpty {
+                    return "\(key):"
+                }
+                return "\(key): \(value)"
+            }
+
+        return normalized.joined(separator: "\n")
     }
 
     private func decodeBodyPreview(_ value: String) -> String? {
@@ -468,6 +511,7 @@ final class ProxyLogStore {
     )
     private static let peerRegex = try! NSRegularExpression(pattern: #"peer=([^\s]+)"#)
     private static let mapLocalRegex = try! NSRegularExpression(pattern: #"map_local=([^\s]+)"#)
+    private static let requestIDRegex = try! NSRegularExpression(pattern: #"request_id=([^\s]+)"#)
     private static let headersB64Regex = try! NSRegularExpression(pattern: #"headers_b64=([A-Za-z0-9+/=]+)"#)
     private static let sampleB64Regex = try! NSRegularExpression(pattern: #"sample_b64=([A-Za-z0-9+/=]+)"#)
     private static let directionRegex = try! NSRegularExpression(pattern: #"direction=([a-z]+)"#)

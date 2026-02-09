@@ -14,11 +14,15 @@ private enum ProxyViewModelError: Error, LocalizedError {
 
 @MainActor
 final class ProxyViewModel: ObservableObject {
-  let certPortalURL = "http://crab-proxy.local/"
-  let listenAddress = "127.0.0.1:8888"
+  let certPortalURL = "http://crab-proxy.invalid/"
+  let listenAddress = "0.0.0.0:8888"
   @Published private(set) var caCertPath = ""
   @Published private(set) var caStatusText = "Preparing internal CA"
-  @Published var inspectBodies = true
+  @Published var inspectBodies = true {
+    didSet {
+      applyInspectBodiesIfRunning(oldValue: oldValue)
+    }
+  }
   @Published var isRunning = false
   @Published var statusText = "Stopped"
   @Published var visibleURLFilter = "" {
@@ -46,6 +50,7 @@ final class ProxyViewModel: ObservableObject {
   private let systemProxyService: any MacSystemProxyServicing
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var logFlushTask: Task<Void, Never>?
+  private var inspectBodiesApplyTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
   init(systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService()) {
@@ -71,6 +76,7 @@ final class ProxyViewModel: ObservableObject {
 
   deinit {
     logFlushTask?.cancel()
+    inspectBodiesApplyTask?.cancel()
   }
 
   var selectedLog: ProxyLogEntry? {
@@ -357,7 +363,7 @@ final class ProxyViewModel: ObservableObject {
   private func parseListenAddress() -> (host: String, port: UInt16) {
     let raw = trimmed(listenAddress)
     guard !raw.isEmpty else {
-      return ("127.0.0.1", 8888)
+      return ("0.0.0.0", 8888)
     }
 
     if let bracketClose = raw.firstIndex(of: "]"),
@@ -408,6 +414,25 @@ final class ProxyViewModel: ObservableObject {
   private func appendLog(level: UInt8, message: String) {
     pendingLogEvents.append((level, message))
     scheduleLogFlushIfNeeded()
+  }
+
+  private func applyInspectBodiesIfRunning(oldValue: Bool) {
+    guard oldValue != inspectBodies else { return }
+    guard isRunning else { return }
+    inspectBodiesApplyTask?.cancel()
+
+    inspectBodiesApplyTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self else { return }
+      guard !Task.isCancelled else { return }
+      guard self.isRunning else { return }
+
+      self.stopProxy()
+      guard !Task.isCancelled else { return }
+      guard !self.isRunning else { return }
+
+      self.startProxy()
+    }
   }
 
   private func scheduleLogFlushIfNeeded() {

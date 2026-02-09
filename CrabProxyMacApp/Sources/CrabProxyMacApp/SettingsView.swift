@@ -73,6 +73,22 @@ struct GeneralSettingsView: View {
     @Binding var appearanceModeRawValue: String
     @Environment(\.colorScheme) private var colorScheme
 
+    private var appVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (version, build) {
+        case let (.some(version), .some(build)) where !version.isEmpty && !build.isEmpty:
+            return version == build ? version : "\(version) (\(build))"
+        case let (.some(version), _):
+            return version.isEmpty ? "Unknown" : version
+        case let (_, .some(build)):
+            return build.isEmpty ? "Unknown" : build
+        default:
+            return "Unknown"
+        }
+    }
+
     private var appearanceModeBinding: Binding<AppAppearanceMode> {
         Binding<AppAppearanceMode>(
             get: { AppAppearanceMode(rawValue: appearanceModeRawValue) ?? .system },
@@ -88,10 +104,58 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
                 ThemeModeRow(selection: appearanceModeBinding)
+                AppVersionRow(version: appVersionText)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct AppVersionRow: View {
+    let version: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Version")
+                    .font(.custom("Avenir Next Demi Bold", size: 20))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                Text("Installed app version")
+                    .font(.custom("Avenir Next Medium", size: 13))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            }
+
+            Spacer(minLength: 12)
+
+            Text(version)
+                .font(.custom("Menlo", size: 13))
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(CrabTheme.inputFill(for: colorScheme))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
+                        )
+                )
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CrabTheme.themeCardFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
     }
 }
 
