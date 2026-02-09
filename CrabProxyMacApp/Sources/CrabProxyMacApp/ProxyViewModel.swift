@@ -14,6 +14,21 @@ private enum ProxyViewModelError: Error, LocalizedError {
 
 @MainActor
 final class ProxyViewModel: ObservableObject {
+  private struct PersistedMapLocalRule: Codable {
+    var isEnabled: Bool?
+    var matcher: String
+    var sourceType: String
+    var sourceValue: String
+    var statusCode: String
+    var contentType: String
+  }
+
+  private struct PersistedStatusRewriteRule: Codable {
+    var matcher: String
+    var fromStatusCode: String
+    var toStatusCode: String
+  }
+
   let certPortalURL = "http://crab-proxy.invalid/"
   let listenAddress = "0.0.0.0:8888"
   @Published private(set) var caCertPath = ""
@@ -35,6 +50,7 @@ final class ProxyViewModel: ObservableObject {
   @Published private(set) var logs: [ProxyLogEntry] = []
   @Published private(set) var filteredLogs: [ProxyLogEntry] = []
   @Published var selectedLogID: ProxyLogEntry.ID?
+  @Published var stagedMapLocalRule: MapLocalRuleInput?
   @Published var allowRules: [AllowRuleInput] = []
   @Published var mapLocalRules: [MapLocalRuleInput] = []
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
@@ -43,6 +59,8 @@ final class ProxyViewModel: ObservableObject {
   private let logStore = ProxyLogStore(maxLogEntries: 800)
   private let ruleManager = ProxyRuleManager()
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
+  private static let mapLocalRulesDefaultsKey = "CrabProxyMacApp.mapLocalRules.v1"
+  private static let statusRewriteRulesDefaultsKey = "CrabProxyMacApp.statusRewriteRules.v1"
   private static let defaultAllowRuleMatcher = "*.*"
   private let internalCACommonName = "Crab Proxy Internal Root CA"
   private let internalCADays: UInt32 = 3650
@@ -56,17 +74,13 @@ final class ProxyViewModel: ObservableObject {
   init(systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService()) {
     self.systemProxyService = systemProxyService
     allowRules = Self.loadAllowRules()
+    mapLocalRules = Self.loadMapLocalRules()
+    statusRewriteRules = Self.loadStatusRewriteRules()
     bindPersistence()
     refreshInternalCAStatus()
     refreshMacSystemProxyStatus()
     do {
-      let engine = try RustProxyEngine(listenAddress: listenAddress)
-      engine.onLog = { [weak self] level, message in
-        Task { @MainActor [weak self] in
-          self?.appendLog(level: level, message: message)
-        }
-      }
-      self.engine = engine
+      self.engine = try makeEngine()
       self.statusText = "Ready"
     } catch {
       self.statusText = "Init failed: \(error.localizedDescription)"
@@ -123,7 +137,7 @@ final class ProxyViewModel: ObservableObject {
 
       try engine.start()
       isRunning = engine.isRunning()
-      statusText = "Running"
+      statusText = isRunning ? "Running" : "Stopped"
     } catch {
       isRunning = false
       statusText = "Start failed: \(error.localizedDescription)"
@@ -131,17 +145,31 @@ final class ProxyViewModel: ObservableObject {
   }
 
   func stopProxy() {
-    guard let engine else {
+    guard engine != nil else {
       statusText = "Engine not initialized"
       return
     }
 
+    var failure: Error?
+    if let engine {
+      do {
+        try engine.stop()
+      } catch {
+        failure = error
+      }
+    }
+
     do {
-      try engine.stop()
+      try recreateEngine()
       isRunning = false
-      statusText = "Stopped"
+      statusText = failure == nil ? "Stopped" : "Stopped (forced reset)"
     } catch {
-      statusText = "Stop failed: \(error.localizedDescription)"
+      isRunning = self.engine?.isRunning() ?? false
+      if let failure {
+        statusText = "Stop failed: \(failure.localizedDescription); reset failed: \(error.localizedDescription)"
+      } else {
+        statusText = "Stop failed: \(error.localizedDescription)"
+      }
     }
   }
 
@@ -250,6 +278,32 @@ final class ProxyViewModel: ObservableObject {
     mapLocalRules.append(MapLocalRuleInput())
   }
 
+  func stageMapLocalRule(from entry: ProxyLogEntry) {
+    let matcher = defaultMapLocalMatcher(from: entry.url)
+    let statusCode: String
+    if let raw = entry.statusCode, let code = UInt16(raw), (100...599).contains(code) {
+      statusCode = String(code)
+    } else {
+      statusCode = "200"
+    }
+
+    stagedMapLocalRule = MapLocalRuleInput(
+      isEnabled: true,
+      matcher: matcher,
+      sourceType: .file,
+      sourceValue: "",
+      statusCode: statusCode,
+      contentType: ""
+    )
+    statusText = "Map Local draft added. Choose a file and save changes."
+  }
+
+  func consumeStagedMapLocalRule() -> MapLocalRuleInput? {
+    let rule = stagedMapLocalRule
+    stagedMapLocalRule = nil
+    return rule
+  }
+
   func addAllowRule() {
     allowRules.append(AllowRuleInput())
   }
@@ -268,6 +322,74 @@ final class ProxyViewModel: ObservableObject {
 
   func removeStatusRewriteRule(_ id: UUID) {
     statusRewriteRules.removeAll { $0.id == id }
+  }
+
+  func saveRules(
+    allowRules: [AllowRuleInput],
+    mapLocalRules: [MapLocalRuleInput],
+    statusRewriteRules: [StatusRewriteRuleInput]
+  ) {
+    let mergedAllowRules = mergedAllowRulesForMapLocal(
+      allowRules: allowRules,
+      mapLocalRules: mapLocalRules
+    )
+    self.allowRules = mergedAllowRules
+    self.mapLocalRules = mapLocalRules
+    self.statusRewriteRules = statusRewriteRules
+    // Persist immediately so values survive app/tab transitions even if app exits quickly.
+    persistAllowRules()
+    persistMapLocalRules()
+    persistStatusRewriteRules()
+
+    do {
+      let runtimeWasRunning = try applyRulesToEngineAfterSave()
+      statusText = runtimeWasRunning ? "Rules saved and applied" : "Rules saved"
+    } catch {
+      isRunning = engine?.isRunning() ?? false
+      statusText = "Save failed: \(error.localizedDescription)"
+    }
+  }
+
+  private func applyRulesToEngineAfterSave() throws -> Bool {
+    guard let engine else {
+      return false
+    }
+
+    let runtimeWasRunning = engine.isRunning()
+    if runtimeWasRunning {
+      try engine.stop()
+      try recreateEngine()
+    }
+
+    guard let activeEngine = self.engine else {
+      throw ProxyViewModelError.invalidValue("Engine not initialized")
+    }
+    try syncRules(to: activeEngine)
+
+    if runtimeWasRunning {
+      try activeEngine.setListenAddress(listenAddress)
+      try activeEngine.setInspectEnabled(inspectBodies)
+      try ensureInternalCALoaded(engine: activeEngine)
+      try activeEngine.start()
+    }
+
+    isRunning = activeEngine.isRunning()
+    return runtimeWasRunning
+  }
+
+  private func makeEngine() throws -> RustProxyEngine {
+    let engine = try RustProxyEngine(listenAddress: listenAddress)
+    engine.onLog = { [weak self] level, message in
+      Task { @MainActor [weak self] in
+        self?.appendLog(level: level, message: message)
+      }
+    }
+    return engine
+  }
+
+  private func recreateEngine() throws {
+    engine = nil
+    engine = try makeEngine()
   }
 
   private func applyMacSystemProxyStatus(_ status: MacSystemProxyStatus) {
@@ -491,11 +613,137 @@ final class ProxyViewModel: ObservableObject {
         self?.persistAllowRules()
       }
       .store(in: &cancellables)
+
+    $mapLocalRules
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistMapLocalRules()
+      }
+      .store(in: &cancellables)
+
+    $statusRewriteRules
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistStatusRewriteRules()
+      }
+      .store(in: &cancellables)
+  }
+
+  private func defaultMapLocalMatcher(from urlString: String) -> String {
+    guard var components = URLComponents(string: urlString) else {
+      return urlString
+    }
+    components.query = nil
+    components.fragment = nil
+    if let scheme = components.scheme?.lowercased() {
+      if (scheme == "https" && components.port == 443)
+        || (scheme == "http" && components.port == 80)
+      {
+        components.port = nil
+      }
+    }
+    return components.string ?? urlString
+  }
+
+  private func mergedAllowRulesForMapLocal(
+    allowRules: [AllowRuleInput],
+    mapLocalRules: [MapLocalRuleInput]
+  ) -> [AllowRuleInput] {
+    // Empty allowlist means "allow all"; don't force a restrictive list.
+    guard !allowRules.isEmpty else { return allowRules }
+
+    var merged = allowRules
+    var seen: Set<String> = Set(
+      allowRules.map { $0.matcher.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+    )
+
+    for rule in mapLocalRules {
+      if !rule.isEnabled {
+        continue
+      }
+      guard
+        let matcher = allowMatcherCandidate(fromMapLocalMatcher: rule.matcher)
+      else { continue }
+
+      let normalized = matcher.lowercased()
+      if seen.insert(normalized).inserted {
+        merged.append(AllowRuleInput(matcher: matcher))
+      }
+    }
+
+    return merged
+  }
+
+  private func allowMatcherCandidate(fromMapLocalMatcher raw: String) -> String? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    if let components = URLComponents(string: trimmed),
+      let host = components.host,
+      !host.isEmpty
+    {
+      return host
+    }
+
+    if trimmed.hasPrefix("/") {
+      return nil
+    }
+
+    let authorityAndMaybePath: String
+    if let slash = trimmed.firstIndex(of: "/") {
+      authorityAndMaybePath = String(trimmed[..<slash])
+    } else {
+      authorityAndMaybePath = trimmed
+    }
+
+    if authorityAndMaybePath.isEmpty {
+      return nil
+    }
+
+    if authorityAndMaybePath.hasPrefix("["),
+      let close = authorityAndMaybePath.firstIndex(of: "]")
+    {
+      return String(authorityAndMaybePath[...close])
+    }
+
+    if let colon = authorityAndMaybePath.firstIndex(of: ":") {
+      let host = String(authorityAndMaybePath[..<colon])
+      return host.isEmpty ? nil : host
+    }
+
+    return authorityAndMaybePath
   }
 
   private func persistAllowRules() {
     let values = ruleManager.normalizedAllowMatchers(from: allowRules)
     UserDefaults.standard.set(values, forKey: Self.allowRulesDefaultsKey)
+  }
+
+  private func persistMapLocalRules() {
+    let payload = mapLocalRules.map { rule in
+      PersistedMapLocalRule(
+        isEnabled: rule.isEnabled,
+        matcher: rule.matcher,
+        sourceType: rule.sourceType.rawValue,
+        sourceValue: rule.sourceValue,
+        statusCode: rule.statusCode,
+        contentType: rule.contentType
+      )
+    }
+    guard let data = try? JSONEncoder().encode(payload) else { return }
+    UserDefaults.standard.set(data, forKey: Self.mapLocalRulesDefaultsKey)
+  }
+
+  private func persistStatusRewriteRules() {
+    let payload = statusRewriteRules.map { rule in
+      PersistedStatusRewriteRule(
+        matcher: rule.matcher,
+        fromStatusCode: rule.fromStatusCode,
+        toStatusCode: rule.toStatusCode
+      )
+    }
+    guard let data = try? JSONEncoder().encode(payload) else { return }
+    UserDefaults.standard.set(data, forKey: Self.statusRewriteRulesDefaultsKey)
   }
 
   private static func loadAllowRules() -> [AllowRuleInput] {
@@ -512,5 +760,46 @@ final class ProxyViewModel: ObservableObject {
     }
 
     return saved.map { AllowRuleInput(matcher: $0) }
+  }
+
+  private static func loadMapLocalRules() -> [MapLocalRuleInput] {
+    let defaults = UserDefaults.standard
+    guard let data = defaults.data(forKey: Self.mapLocalRulesDefaultsKey) else {
+      return []
+    }
+    guard let saved = try? JSONDecoder().decode([PersistedMapLocalRule].self, from: data) else {
+      return []
+    }
+
+    return saved.map { item in
+      MapLocalRuleInput(
+        isEnabled: item.isEnabled ?? true,
+        matcher: item.matcher,
+        sourceType: RuleSourceType(rawValue: item.sourceType) ?? .file,
+        sourceValue: item.sourceValue,
+        statusCode: item.statusCode,
+        contentType: item.contentType
+      )
+    }
+  }
+
+  private static func loadStatusRewriteRules() -> [StatusRewriteRuleInput] {
+    let defaults = UserDefaults.standard
+    guard let data = defaults.data(forKey: Self.statusRewriteRulesDefaultsKey) else {
+      return []
+    }
+    guard
+      let saved = try? JSONDecoder().decode([PersistedStatusRewriteRule].self, from: data)
+    else {
+      return []
+    }
+
+    return saved.map { item in
+      StatusRewriteRuleInput(
+        matcher: item.matcher,
+        fromStatusCode: item.fromStatusCode,
+        toStatusCode: item.toStatusCode
+      )
+    }
   }
 }

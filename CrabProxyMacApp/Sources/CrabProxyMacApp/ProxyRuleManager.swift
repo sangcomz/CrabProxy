@@ -25,6 +25,10 @@ struct ProxyRuleManager {
         }
 
         for (index, draft) in mapLocalRules.enumerated() {
+            if !draft.isEnabled {
+                continue
+            }
+
             let matcher = trimmed(draft.matcher)
             let sourceValue = trimmed(draft.sourceValue)
             let contentType = optionalTrimmed(draft.contentType)

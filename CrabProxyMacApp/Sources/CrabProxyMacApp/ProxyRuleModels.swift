@@ -9,6 +9,7 @@ enum RuleSourceType: String, CaseIterable, Identifiable {
 
 struct MapLocalRuleInput: Identifiable, Hashable {
     let id: UUID
+    var isEnabled: Bool
     var matcher: String
     var sourceType: RuleSourceType
     var sourceValue: String
@@ -17,6 +18,7 @@ struct MapLocalRuleInput: Identifiable, Hashable {
 
     init(
         id: UUID = UUID(),
+        isEnabled: Bool = true,
         matcher: String = "",
         sourceType: RuleSourceType = .file,
         sourceValue: String = "",
@@ -24,6 +26,7 @@ struct MapLocalRuleInput: Identifiable, Hashable {
         contentType: String = ""
     ) {
         self.id = id
+        self.isEnabled = isEnabled
         self.matcher = matcher
         self.sourceType = sourceType
         self.sourceValue = sourceValue

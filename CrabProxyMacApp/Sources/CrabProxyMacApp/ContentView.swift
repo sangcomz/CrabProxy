@@ -5,6 +5,7 @@ struct ContentView: View {
     @ObservedObject var model: ProxyViewModel
     @Binding var appearanceModeRawValue: String
     @AppStorage("CrabProxyMacApp.currentScreen") private var currentScreenRawValue = MainScreen.traffic.rawValue
+    @AppStorage("CrabProxyMacApp.settingsTab") private var settingsTabRawValue = "General"
     @State private var animateBackground = false
     @State private var detailTab: DetailTab = .summary
     @State private var isTrafficListAtTop = true
@@ -241,6 +242,13 @@ struct ContentView: View {
                         ForEach(displayedTrafficLogs) { entry in
                             TransactionRow(entry: entry)
                                 .tag(entry.id)
+                                .contextMenu {
+                                    Button("Add to Map Local") {
+                                        model.stageMapLocalRule(from: entry)
+                                        settingsTabRawValue = "Rules"
+                                        currentScreenRawValue = MainScreen.settings.rawValue
+                                    }
+                                }
                                 .listRowBackground(Color.clear)
                         }
                     }
@@ -323,6 +331,12 @@ struct ContentView: View {
                 MethodBadge(method: entry.method)
                 ValuePill(text: entry.statusCode ?? "--", tint: secondaryTint)
                 ValuePill(text: entry.event, tint: primaryTint)
+                if entry.event == "tunnel" {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(secondaryTint)
+                        .help("Encrypted tunnel (not decrypted)")
+                }
                 Spacer()
                 Text(formatLogTimeWithSeconds(entry.timestamp))
                     .font(.custom("Menlo", size: 11))
@@ -500,6 +514,12 @@ private struct TransactionRow: View {
                 Text(entry.event)
                     .font(.custom("Avenir Next Demi Bold", size: 11))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                if entry.event == "tunnel" {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(CrabTheme.secondaryTint(for: colorScheme))
+                        .help("Encrypted tunnel (not decrypted)")
+                }
                 Spacer()
                 Text(formatLogTimeWithSeconds(entry.timestamp))
                     .font(.custom("Menlo", size: 10))

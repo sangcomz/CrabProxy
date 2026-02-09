@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
@@ -247,7 +248,18 @@ private struct ThemeModeChip: View {
 
 struct RulesSettingsView: View {
     @ObservedObject var model: ProxyViewModel
+    @State private var draftAllowRules: [AllowRuleInput] = []
+    @State private var draftMapLocalRules: [MapLocalRuleInput] = []
+    @State private var expandedMapLocalRuleIDs: Set<UUID> = []
+    @State private var draftStatusRewriteRules: [StatusRewriteRuleInput] = []
+    @State private var didInitializeDrafts = false
     @Environment(\.colorScheme) private var colorScheme
+
+    private var hasUnsavedChanges: Bool {
+        draftAllowRules != model.allowRules
+            || draftMapLocalRules != model.mapLocalRules
+            || draftStatusRewriteRules != model.statusRewriteRules
+    }
 
     var body: some View {
         ScrollView {
@@ -260,6 +272,28 @@ struct RulesSettingsView: View {
                     .font(.custom("Avenir Next Medium", size: 13))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
+                HStack(spacing: 10) {
+                    if hasUnsavedChanges {
+                        Text("Unsaved changes")
+                            .font(.custom("Avenir Next Demi Bold", size: 12))
+                            .foregroundStyle(CrabTheme.warningTint(for: colorScheme))
+                    }
+
+                    Spacer()
+
+                    Button("Discard") {
+                        loadDraftsFromModel(force: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!hasUnsavedChanges)
+
+                    Button("Save Changes") {
+                        saveDraftRules()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!hasUnsavedChanges)
+                }
+
                 allowListSection
                 mapLocalSection
                 statusRewriteSection
@@ -267,6 +301,19 @@ struct RulesSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            loadDraftsFromModel(force: !didInitializeDrafts)
+            consumeStagedMapLocalRuleIfNeeded()
+        }
+        .onChange(of: model.allowRules) { _, _ in
+            loadDraftsFromModel(force: false)
+        }
+        .onChange(of: model.mapLocalRules) { _, _ in
+            loadDraftsFromModel(force: false)
+        }
+        .onChange(of: model.statusRewriteRules) { _, _ in
+            loadDraftsFromModel(force: false)
+        }
     }
 
     private var allowListSection: some View {
@@ -277,7 +324,7 @@ struct RulesSettingsView: View {
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
-                    model.addAllowRule()
+                    draftAllowRules.append(AllowRuleInput())
                 }
                 .tint(CrabTheme.primaryTint(for: colorScheme))
             }
@@ -286,15 +333,15 @@ struct RulesSettingsView: View {
                 .font(.custom("Avenir Next Medium", size: 12))
                 .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
-            if model.allowRules.isEmpty {
+            if draftAllowRules.isEmpty {
                 EmptyRuleHint(text: "No allowlist rule. Empty means allow all traffic.")
             } else {
-                ForEach($model.allowRules) { $rule in
+                ForEach($draftAllowRules) { $rule in
                     HStack(spacing: 8) {
                         TextField("Allowed URL pattern", text: $rule.matcher)
                             .textFieldStyle(.roundedBorder)
                         Button {
-                            model.removeAllowRule(rule.id)
+                            draftAllowRules.removeAll { $0.id == rule.id }
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -324,55 +371,159 @@ struct RulesSettingsView: View {
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
-                    model.addMapLocalRule()
+                    let newRule = MapLocalRuleInput()
+                    draftMapLocalRules.append(newRule)
+                    expandedMapLocalRuleIDs.insert(newRule.id)
                 }
                 .tint(CrabTheme.primaryTint(for: colorScheme))
             }
 
-            if model.mapLocalRules.isEmpty {
+            if draftMapLocalRules.isEmpty {
                 EmptyRuleHint(text: "No map-local rule yet")
             } else {
-                ForEach($model.mapLocalRules) { $rule in
-                    VStack(spacing: 8) {
-                        HStack(spacing: 8) {
-                            TextField("Match URL prefix", text: $rule.matcher)
-                                .textFieldStyle(.roundedBorder)
-                            Picker("Source", selection: $rule.sourceType) {
-                                ForEach(RuleSourceType.allCases) { source in
-                                    Text(source.rawValue).tag(source)
+                ForEach($draftMapLocalRules) { $rule in
+                    if expandedMapLocalRuleIDs.contains(rule.id) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .center, spacing: 10) {
+                                Toggle("Enabled", isOn: $rule.isEnabled)
+                                    .toggleStyle(.checkbox)
+                                    .font(.custom("Avenir Next Medium", size: 12))
+                                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                                Spacer()
+                                Button("Collapse") {
+                                    expandedMapLocalRuleIDs.remove(rule.id)
                                 }
+                                .buttonStyle(.bordered)
                             }
-                            .pickerStyle(.segmented)
-                            .frame(width: 130)
-                            TextField("Status", text: $rule.statusCode)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 90)
-                            Button {
-                                model.removeMapLocalRule(rule.id)
+
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("URL")
+                                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                                    TextField("Match URL prefix", text: $rule.matcher)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Source")
+                                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                                    Picker("", selection: $rule.sourceType) {
+                                        ForEach(RuleSourceType.allCases) { source in
+                                            Text(source.rawValue).tag(source)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.segmented)
+                                    .frame(width: 160)
+                                }
+                                .frame(width: 160, alignment: .leading)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Status")
+                                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                                    TextField("200", text: $rule.statusCode)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 96)
+                                }
+                                .frame(width: 96, alignment: .leading)
+                            }
+
+                            HStack(alignment: .bottom, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(rule.sourceType == .file ? "Local File" : "Inline Text")
+                                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                                    TextField(
+                                        rule.sourceType == .file ? "Local file path" : "Inline text body",
+                                        text: $rule.sourceValue
+                                    )
+                                    .textFieldStyle(.roundedBorder)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                if rule.sourceType == .file {
+                                    Button("Choose File…") {
+                                        if let selected = pickMapLocalSourceFile() {
+                                            rule.sourceValue = selected
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .frame(width: 160, alignment: .leading)
+                                } else {
+                                    Color.clear
+                                        .frame(width: 160, height: 1)
+                                }
+
+                                Color.clear
+                                    .frame(width: 96, height: 1)
+                            }
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Content-Type")
+                                    .font(.custom("Avenir Next Demi Bold", size: 11))
+                                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                                TextField("Optional (e.g. application/json)", text: $rule.contentType)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            Button(role: .destructive) {
+                                draftMapLocalRules.removeAll { $0.id == rule.id }
+                                expandedMapLocalRuleIDs.remove(rule.id)
+                            } label: {
+                                Label("Delete Rule", systemImage: "trash")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Delete this map-local rule")
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(CrabTheme.ruleCardFill(for: colorScheme))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                                )
+                        )
+                    } else {
+                        HStack(spacing: 10) {
+                            Toggle("", isOn: $rule.isEnabled)
+                                .toggleStyle(.checkbox)
+                                .labelsHidden()
+                            Text(rule.matcher.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(empty URL)" : rule.matcher)
+                                .font(.custom("Menlo", size: 12))
+                                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button("Edit") {
+                                expandedMapLocalRuleIDs.insert(rule.id)
+                            }
+                            .buttonStyle(.bordered)
+                            Button(role: .destructive) {
+                                draftMapLocalRules.removeAll { $0.id == rule.id }
                             } label: {
                                 Image(systemName: "trash")
                             }
                             .buttonStyle(.bordered)
                         }
-
-                        TextField(
-                            rule.sourceType == .file ? "Local file path" : "Inline text body",
-                            text: $rule.sourceValue
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(CrabTheme.ruleCardFill(for: colorScheme))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                                )
                         )
-                        .textFieldStyle(.roundedBorder)
-
-                        TextField("Content-Type (optional)", text: $rule.contentType)
-                            .textFieldStyle(.roundedBorder)
                     }
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(CrabTheme.ruleCardFill(for: colorScheme))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
-                            )
-                    )
                 }
             }
         }
@@ -388,15 +539,15 @@ struct RulesSettingsView: View {
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
-                    model.addStatusRewriteRule()
+                    draftStatusRewriteRules.append(StatusRewriteRuleInput())
                 }
                 .tint(CrabTheme.primaryTint(for: colorScheme))
             }
 
-            if model.statusRewriteRules.isEmpty {
+            if draftStatusRewriteRules.isEmpty {
                 EmptyRuleHint(text: "No status-rewrite rule yet")
             } else {
-                ForEach($model.statusRewriteRules) { $rule in
+                ForEach($draftStatusRewriteRules) { $rule in
                     HStack(spacing: 8) {
                         TextField("Match URL prefix", text: $rule.matcher)
                             .textFieldStyle(.roundedBorder)
@@ -409,7 +560,7 @@ struct RulesSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 110)
                         Button {
-                            model.removeStatusRewriteRule(rule.id)
+                            draftStatusRewriteRules.removeAll { $0.id == rule.id }
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -429,6 +580,61 @@ struct RulesSettingsView: View {
         }
         .padding(14)
         .background(GlassCard())
+    }
+
+    private func loadDraftsFromModel(force: Bool) {
+        if !force && didInitializeDrafts && hasUnsavedChanges {
+            return
+        }
+        draftAllowRules = model.allowRules
+        draftMapLocalRules = model.mapLocalRules
+        draftStatusRewriteRules = model.statusRewriteRules
+        if force {
+            expandedMapLocalRuleIDs.removeAll()
+        }
+        didInitializeDrafts = true
+    }
+
+    private func saveDraftRules() {
+        // Commit any in-progress text composition before reading draft values.
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        let originalAllowCount = draftAllowRules.count
+        model.saveRules(
+            allowRules: draftAllowRules,
+            mapLocalRules: draftMapLocalRules,
+            statusRewriteRules: draftStatusRewriteRules
+        )
+        if model.allowRules.count > originalAllowCount {
+            draftAllowRules = model.allowRules
+        }
+        loadDraftsFromModel(force: true)
+    }
+
+    private func consumeStagedMapLocalRuleIfNeeded() {
+        guard let staged = model.consumeStagedMapLocalRule() else { return }
+        let alreadyExists = draftMapLocalRules.contains {
+            $0.matcher == staged.matcher
+                && $0.isEnabled == staged.isEnabled
+                && $0.sourceType == staged.sourceType
+                && $0.sourceValue == staged.sourceValue
+                && $0.statusCode == staged.statusCode
+                && $0.contentType == staged.contentType
+        }
+        if !alreadyExists {
+            draftMapLocalRules.append(staged)
+            expandedMapLocalRuleIDs.insert(staged.id)
+        }
+    }
+
+    private func pickMapLocalSourceFile() -> String? {
+        let panel = NSOpenPanel()
+        panel.title = "Select local response file"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        return panel.runModal() == .OK ? panel.url?.path : nil
     }
 }
 

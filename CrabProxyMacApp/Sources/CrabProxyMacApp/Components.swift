@@ -6,6 +6,38 @@ private func copyToPasteboard(_ value: String) {
     NSPasteboard.general.setString(value, forType: .string)
 }
 
+private struct CopyFeedbackButton: View {
+    let idleTitle: String
+    let payload: String?
+    var copiedTitle = "Copied"
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var didCopy = false
+
+    private var isEnabled: Bool {
+        guard let payload else { return false }
+        return !payload.isEmpty
+    }
+
+    var body: some View {
+        Button(didCopy ? copiedTitle : idleTitle) {
+            guard let payload, !payload.isEmpty else { return }
+            copyToPasteboard(payload)
+            didCopy = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+                didCopy = false
+            }
+        }
+        .buttonStyle(.borderless)
+        .font(.custom("Avenir Next Demi Bold", size: 11))
+        .foregroundStyle(
+            didCopy
+                ? CrabTheme.secondaryTint(for: colorScheme)
+                : CrabTheme.primaryTint(for: colorScheme)
+        )
+        .disabled(!isEnabled)
+    }
+}
+
 struct CodeBlock: View {
     let text: String?
     let placeholder: String
@@ -31,19 +63,19 @@ struct CodeBlock: View {
         return hasContent ? renderedText : nil
     }
 
+    private var showsCopyButton: Bool {
+        showCopyButton && effectiveCopyPayload != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if showCopyButton {
+            if showsCopyButton {
                 HStack {
                     Spacer()
-                    Button(copyButtonLabel) {
-                        guard let payload = effectiveCopyPayload else { return }
-                        copyToPasteboard(payload)
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.custom("Avenir Next Demi Bold", size: 11))
-                    .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
-                    .disabled(effectiveCopyPayload == nil)
+                    CopyFeedbackButton(
+                        idleTitle: copyButtonLabel,
+                        payload: effectiveCopyPayload
+                    )
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
@@ -59,6 +91,7 @@ struct CodeBlock: View {
                 )
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 120)
+                .padding(.top, showsCopyButton ? 0 : 8)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
         }
@@ -103,12 +136,7 @@ private struct HeaderFieldRow: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button("Copy") {
-                copyToPasteboard(field.line)
-            }
-            .buttonStyle(.borderless)
-            .font(.custom("Avenir Next Demi Bold", size: 11))
-            .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+            CopyFeedbackButton(idleTitle: "Copy", payload: field.line)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -148,13 +176,7 @@ struct HeaderBlock: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Spacer()
-                    Button("Copy All") {
-                        guard let copyPayload else { return }
-                        copyToPasteboard(copyPayload)
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.custom("Avenir Next Demi Bold", size: 11))
-                    .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+                    CopyFeedbackButton(idleTitle: "Copy All", payload: copyPayload)
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
@@ -227,12 +249,7 @@ private struct JSONFieldRow: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button("Copy") {
-                copyToPasteboard(field.value)
-            }
-            .buttonStyle(.borderless)
-            .font(.custom("Avenir Next Demi Bold", size: 11))
-            .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+            CopyFeedbackButton(idleTitle: "Copy", payload: field.value)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -274,12 +291,7 @@ private struct JSONFieldsBlock: View {
                     .font(.custom("Avenir Next Demi Bold", size: 11))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 Spacer()
-                Button("Copy All Fields") {
-                    copyToPasteboard(copyPayload)
-                }
-                .buttonStyle(.borderless)
-                .font(.custom("Avenir Next Demi Bold", size: 11))
-                .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+                CopyFeedbackButton(idleTitle: "Copy All Fields", payload: copyPayload)
             }
 
             ScrollView {
@@ -438,12 +450,7 @@ struct CopyValueRow: View {
 
             Spacer()
 
-            Button("Copy") {
-                copyToPasteboard(value)
-            }
-            .buttonStyle(.borderless)
-            .font(.custom("Avenir Next Demi Bold", size: 11))
-            .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+            CopyFeedbackButton(idleTitle: "Copy", payload: value)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
