@@ -68,6 +68,20 @@ final class ProxyLogStore {
         let trimmedLine = trimmed(message)
         guard !trimmedLine.isEmpty else { return nil }
 
+        if let payload = parseStructuredPayload(level: level, line: trimmedLine) {
+            switch payload {
+            case let .entry(entry):
+                return appendEntry(entry, currentSelectedLogID: currentSelectedLogID)
+            case let .metadata(key, meta):
+                if applyMetadata(meta, toKey: key) {
+                    return (logs, currentSelectedLogID)
+                }
+                return nil
+            case .ignore:
+                return nil
+            }
+        }
+
         if let metadataUpdated = handleMetadataLog(trimmedLine) {
             if metadataUpdated {
                 return (logs, currentSelectedLogID)
@@ -76,28 +90,7 @@ final class ProxyLogStore {
         }
 
         guard let entry = makeEntry(level: level, line: trimmedLine) else { return nil }
-
-        let key = transactionKey(peer: entry.peer, method: entry.method, url: entry.url)
-        var materialized = entry
-        if let pending = pendingMetaByKey.removeValue(forKey: key) {
-            apply(meta: pending, to: &materialized)
-        }
-
-        logs.append(materialized)
-        latestLogIDByKey[key] = materialized.id
-        logIndexByID[materialized.id] = logs.count - 1
-
-        if logs.count > maxLogEntries {
-            let overflow = logs.count - maxLogEntries
-            let removedIDs = Set(logs.prefix(overflow).map(\.id))
-            logs.removeFirst(overflow)
-            latestLogIDByKey = latestLogIDByKey.filter { !removedIDs.contains($0.value) }
-            rebuildLogIndex()
-        }
-
-        let isSelectionValid = currentSelectedLogID.flatMap { logIndexByID[$0] } != nil
-        let selectedLogID = (currentSelectedLogID == nil || !isSelectionValid) ? logs.last?.id : currentSelectedLogID
-        return (logs, selectedLogID)
+        return appendEntry(entry, currentSelectedLogID: currentSelectedLogID)
     }
 
     func appendBatch(
@@ -131,6 +124,146 @@ final class ProxyLogStore {
             next[entry.id] = index
         }
         logIndexByID = next
+    }
+
+    private func appendEntry(_ entry: ProxyLogEntry, currentSelectedLogID: ProxyLogEntry.ID?) -> (logs: [ProxyLogEntry], selectedLogID: ProxyLogEntry.ID?) {
+        let key = transactionKey(peer: entry.peer, method: entry.method, url: entry.url)
+        var materialized = entry
+        if let pending = pendingMetaByKey.removeValue(forKey: key) {
+            apply(meta: pending, to: &materialized)
+        }
+
+        logs.append(materialized)
+        latestLogIDByKey[key] = materialized.id
+        logIndexByID[materialized.id] = logs.count - 1
+
+        if logs.count > maxLogEntries {
+            let overflow = logs.count - maxLogEntries
+            let removedIDs = Set(logs.prefix(overflow).map(\.id))
+            logs.removeFirst(overflow)
+            latestLogIDByKey = latestLogIDByKey.filter { !removedIDs.contains($0.value) }
+            rebuildLogIndex()
+        }
+
+        let isSelectionValid = currentSelectedLogID.flatMap { logIndexByID[$0] } != nil
+        let selectedLogID = (currentSelectedLogID == nil || !isSelectionValid) ? logs.last?.id : currentSelectedLogID
+        return (logs, selectedLogID)
+    }
+
+    private enum StructuredPayload {
+        case entry(ProxyLogEntry)
+        case metadata(key: String, meta: PendingTransactionMeta)
+        case ignore
+    }
+
+    private func parseStructuredPayload(level: UInt8, line: String) -> StructuredPayload? {
+        guard let marker = line.range(of: "CRAB_JSON ") else {
+            return nil
+        }
+        let jsonText = String(line[marker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jsonText.isEmpty, let data = jsonText.data(using: .utf8) else {
+            return .ignore
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .ignore
+        }
+
+        let payloadType = stringField("type", in: object) ?? ""
+        let event = stringField("event", in: object) ?? ""
+
+        if payloadType == "entry" {
+            guard
+                let method = stringField("method", in: object),
+                let url = stringField("url", in: object)
+            else {
+                return .ignore
+            }
+            let status = statusField(in: object)
+            let peer = stringField("peer", in: object)
+            let mapLocal = stringField("map_local", in: object)
+            return .entry(
+                ProxyLogEntry(
+                    id: UUID(),
+                    timestamp: Date(),
+                    level: level,
+                    levelLabel: levelLabel(for: level),
+                    event: event,
+                    method: method,
+                    url: url,
+                    statusCode: status,
+                    peer: peer,
+                    mapLocalMatcher: mapLocal,
+                    requestHeaders: nil,
+                    responseHeaders: nil,
+                    requestBodyPreview: nil,
+                    responseBodyPreview: nil,
+                    rawLine: line
+                )
+            )
+        }
+
+        if payloadType == "meta" {
+            guard
+                let peer = stringField("peer", in: object),
+                let method = stringField("method", in: object),
+                let url = stringField("url", in: object)
+            else {
+                return .ignore
+            }
+            let key = transactionKey(peer: peer, method: method, url: url)
+
+            switch event {
+            case "request_headers":
+                let headersB64 = stringField("headers_b64", in: object) ?? ""
+                let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
+                return .metadata(key: key, meta: PendingTransactionMeta(requestHeaders: decoded))
+            case "response_headers":
+                let headersB64 = stringField("headers_b64", in: object) ?? ""
+                let decoded = decodeBase64Text(headersB64) ?? "<failed to decode headers>"
+                return .metadata(key: key, meta: PendingTransactionMeta(responseHeaders: decoded))
+            case "body_inspection":
+                let direction = stringField("direction", in: object) ?? ""
+                let sampleB64 = stringField("sample_b64", in: object) ?? ""
+                let preview = decodeBodyPreview(sampleB64)
+                if direction == "request" {
+                    return .metadata(key: key, meta: PendingTransactionMeta(requestBodyPreview: preview))
+                }
+                if direction == "response" {
+                    return .metadata(key: key, meta: PendingTransactionMeta(responseBodyPreview: preview))
+                }
+                return .ignore
+            default:
+                return .ignore
+            }
+        }
+
+        return .ignore
+    }
+
+    private func stringField(_ key: String, in object: [String: Any]) -> String? {
+        if let value = object[key] as? String {
+            return value
+        }
+        if let number = object[key] as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    private func statusField(in object: [String: Any]) -> String? {
+        if let value = object["status"] as? NSNumber {
+            return value.stringValue
+        }
+        if let value = object["status"] as? String {
+            return value
+        }
+        if let value = object["response_status"] as? NSNumber {
+            return value.stringValue
+        }
+        if let value = object["response_status"] as? String {
+            return value
+        }
+        return nil
     }
 
     private func makeEntry(level: UInt8, line: String) -> ProxyLogEntry? {

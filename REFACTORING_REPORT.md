@@ -25,6 +25,34 @@
 - [x] `P-02` logs 선형 검색 반복 제거 (`logIndexByID` 인덱스 기반 조회)
 - [x] `P-03` `@Published logs` 갱신 배치화 (`appendBatch` + 50ms 배치 flush)
 - [x] `P-04` `InspectMeta` 문자열 clone 최적화 (`Arc<str>`)
+- [x] `S-08` 민감 헤더 로그 마스킹 (`CRAB_MASK_SENSITIVE_HEADERS` 옵션)
+- [x] `S-10` iOS mobileconfig UUID 고유화 (CA 인증서 기반 결정적 UUID)
+- [x] `S-11` 인증서 포탈에 SHA-256 fingerprint 표시
+- [x] `S-12` CONNECT 터널 SSRF 방어 (`CRAB_CONNECT_BLOCK_PRIVATE` 옵션)
+- [x] `A-08` FFI 레이어 테스트 추가 (`ffi.rs` 단위 테스트 7개 추가)
+- [x] `A-09` 에러 코드 동기화 자동화 (`crab_mitm.h` ↔ `ffi.rs` 검증 테스트)
+- [x] `S-09` Mutex poisoning 처리 일관화 (`ca.rs` panic 제거, 에러 반환)
+- [x] `A-05` HTTP 응답 헬퍼 통합 (`owned_bytes_response` 기반)
+- [x] `A-06` `Matcher`/`AllowRule` 매칭 로직 통합 (공통 prefix 매칭 함수)
+- [x] `A-07` 구조화 로그 포맷(JSON) 도입 (`CRAB_JSON` 라인 + Swift fast-path)
+- [x] `P-08` async context 내 동기 I/O 제거 (BodyInspector spool writer thread)
+- [x] `P-09` CA Signer 동기 Mutex 병목 완화 (`tokio::sync::Mutex`)
+- [x] `P-10` 인증서 캐시 TOCTOU 보완 (double-check after build)
+- [x] `P-11` 로그 콜백 문자열 변환 최적화 (bytes 기반 처리)
+- [x] `P-12` rules 매칭 시 반복 String 할당 감소 (zero-allocation prefix 매칭)
+- [x] `P-13` BodyInspector sample Vec 사전 할당 (`Vec::with_capacity`)
+- [x] `P-14` 로그 파싱 정규식 비용 최적화 (`CRAB_JSON` JSON 파싱 우선)
+- [x] `P-15` `resolve_target` URI 재파싱 제거 (absolute URI clone + builder)
+- [x] `P-16` `encode_headers_for_log` 할당 최적화 (`String::with_capacity`)
+- [x] `P-17` `map_local` Text 소스 이중 `Bytes` 생성 제거
+- [x] `A-10` CrabTheme 중복 제거 (팔레트 기반 테마 매핑으로 switch 중복 제거)
+- [x] `A-11` CLI 전용 의존성 feature flag 분리 (`clap` optional + `cli` feature + bin required-features)
+- [x] `A-12` `MacSystemProxyService` 프로토콜 추출 (`MacSystemProxyServicing` + DI)
+- [x] `S-13` 기본 바인딩 Open Proxy 위험 완화 (`127.0.0.1:8888` 기본값)
+- [x] `S-14` leaf 인증서 캐시 만료 처리 (TTL 기반 캐시 엔트리 만료)
+- [x] `S-15` CI에 `cargo audit` 추가 (`.github/workflows/security-audit.yml`)
+- [x] `P-18` tokio worker_threads 설정 개선 (자동 parallelism + env override)
+- [x] `P-19` HTTP/2 지원 확장 (ALPN `h2` + auto server + upstream h2)
 
 ### 다음 처리 대상 (우선순위별 전체 백로그)
 
@@ -38,37 +66,30 @@
 
 #### Medium
 
-- [ ] `A-05` HTTP 응답 헬퍼 통합
-- [ ] `A-06` `Matcher`/`AllowRule` 매칭 로직 통합
-- [ ] `A-07` 구조화 로그 포맷(JSON) 도입
-- [ ] `A-08` FFI 레이어 테스트 추가
-- [ ] `A-09` 에러 코드 동기화 자동화
-- [ ] `S-08` 민감 헤더 로그 마스킹
-- [ ] `S-09` Mutex poisoning 처리 일관화
-- [ ] `S-10` iOS mobileconfig UUID 고유화
-- [ ] `S-11` 인증서 포탈에 fingerprint 표시
-- [ ] `S-12` CONNECT 터널 SSRF 방어
-- [ ] `P-08` async context 내 동기 I/O 제거 (BodyInspector)
-- [ ] `P-09` CA Signer 동기 Mutex 병목 완화
-- [ ] `P-10` 인증서 캐시 TOCTOU 보완
-- [ ] `P-11` 로그 콜백 문자열 변환 최적화
-- [ ] `P-12` rules 매칭 시 반복 String 할당 감소
-- [ ] `P-13` BodyInspector sample Vec 사전 할당
-- [ ] `P-14` 로그 파싱 정규식 비용 최적화
-- [ ] `P-15` `resolve_target` URI 재파싱 제거
-- [ ] `P-16` `encode_headers_for_log` 할당 최적화
-- [ ] `P-17` `map_local` Text 소스 이중 `Bytes` 생성 제거
+- [x] `A-05` HTTP 응답 헬퍼 통합
+- [x] `A-06` `Matcher`/`AllowRule` 매칭 로직 통합
+- [x] `A-07` 구조화 로그 포맷(JSON) 도입
+- [x] `A-08` FFI 레이어 테스트 추가
+- [x] `A-09` 에러 코드 동기화 자동화
+- [x] `S-08` 민감 헤더 로그 마스킹
+- [x] `S-09` Mutex poisoning 처리 일관화
+- [x] `S-10` iOS mobileconfig UUID 고유화
+- [x] `S-11` 인증서 포탈에 fingerprint 표시
+- [x] `S-12` CONNECT 터널 SSRF 방어
+- [x] `P-08` async context 내 동기 I/O 제거 (BodyInspector)
+- [x] `P-09` CA Signer 동기 Mutex 병목 완화
+- [x] `P-10` 인증서 캐시 TOCTOU 보완
+- [x] `P-11` 로그 콜백 문자열 변환 최적화
+- [x] `P-12` rules 매칭 시 반복 String 할당 감소
+- [x] `P-13` BodyInspector sample Vec 사전 할당
+- [x] `P-14` 로그 파싱 정규식 비용 최적화
+- [x] `P-15` `resolve_target` URI 재파싱 제거
+- [x] `P-16` `encode_headers_for_log` 할당 최적화
+- [x] `P-17` `map_local` Text 소스 이중 `Bytes` 생성 제거
 
 #### Low
 
-- [ ] `A-10` CrabTheme 중복 제거
-- [ ] `A-11` CLI 전용 의존성 feature flag 분리
-- [ ] `A-12` `MacSystemProxyService` 프로토콜 추출
-- [ ] `S-13` 기본 바인딩 Open Proxy 위험 완화
-- [ ] `S-14` leaf 인증서 캐시 만료 처리
-- [ ] `S-15` CI에 `cargo audit` 추가
-- [ ] `P-18` tokio worker_threads 설정 개선
-- [ ] `P-19` HTTP/2 지원 검토
+- 없음 (Low 8개 항목 완료: `A-10`, `A-11`, `A-12`, `S-13`, `S-14`, `S-15`, `P-18`, `P-19`)
 
 ---
 
