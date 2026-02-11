@@ -47,6 +47,9 @@ final class ProxyViewModel: ObservableObject {
   @Published private(set) var macSystemProxyEnabled = false
   @Published private(set) var macSystemProxyServiceText = "Unknown"
   @Published private(set) var macSystemProxyStateText = "Unknown"
+  @Published var transparentProxyEnabled = false
+  @Published private(set) var isApplyingTransparentProxy = false
+  @Published private(set) var transparentProxyStateText = "OFF"
   @Published private(set) var isApplyingMacSystemProxy = false
   @Published private(set) var logs: [ProxyLogEntry] = []
   @Published private(set) var filteredLogs: [ProxyLogEntry] = []
@@ -66,13 +69,19 @@ final class ProxyViewModel: ObservableObject {
   private let internalCACommonName = "Crab Proxy Internal Root CA"
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
+  private let transparentProxyPort: UInt16 = 8889
+  private let pfService: any PFServicing
   private let systemProxyService: any MacSystemProxyServicing
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var logFlushTask: Task<Void, Never>?
   private var inspectBodiesApplyTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
-  init(systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService()) {
+  init(
+    systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService(),
+    pfService: any PFServicing = LivePFService()
+  ) {
+    self.pfService = pfService
     self.systemProxyService = systemProxyService
     allowRules = Self.loadAllowRules()
     mapLocalRules = Self.loadMapLocalRules()
@@ -243,6 +252,78 @@ final class ProxyViewModel: ObservableObject {
       } catch {
         statusText = "Disable macOS proxy failed: \(error.localizedDescription)"
         refreshMacSystemProxyStatus()
+      }
+    }
+  }
+
+  func enableTransparentProxy() {
+    guard !isApplyingTransparentProxy else { return }
+    isApplyingTransparentProxy = true
+    let pfService = self.pfService
+    let transparentProxyPort = self.transparentProxyPort
+
+    Task {
+      defer { isApplyingTransparentProxy = false }
+      do {
+        let wasRunning = engine?.isRunning() ?? false
+        if wasRunning {
+          stopProxy()
+        }
+
+        guard let engine else {
+          transparentProxyEnabled = false
+          statusText = "Engine not initialized"
+          return
+        }
+
+        try engine.setTransparentEnabled(true)
+        try engine.setTransparentPort(transparentProxyPort)
+
+        try await Task.detached(priority: .userInitiated) {
+          try pfService.enable(proxyPort: Int(transparentProxyPort))
+        }.value
+
+        if wasRunning {
+          startProxy()
+        }
+
+        transparentProxyStateText = "ON (port \(transparentProxyPort))"
+        statusText = "Transparent proxy enabled"
+      } catch {
+        transparentProxyEnabled = false
+        transparentProxyStateText = "OFF"
+        statusText = "Enable transparent proxy failed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func disableTransparentProxy() {
+    guard !isApplyingTransparentProxy else { return }
+    isApplyingTransparentProxy = true
+    let pfService = self.pfService
+
+    Task {
+      defer { isApplyingTransparentProxy = false }
+      do {
+        try await Task.detached(priority: .userInitiated) {
+          try pfService.disable()
+        }.value
+
+        if let engine {
+          let wasRunning = engine.isRunning()
+          if wasRunning {
+            stopProxy()
+          }
+          try engine.setTransparentEnabled(false)
+          if wasRunning {
+            startProxy()
+          }
+        }
+
+        transparentProxyStateText = "OFF"
+        statusText = "Transparent proxy disabled"
+      } catch {
+        statusText = "Disable transparent proxy failed: \(error.localizedDescription)"
       }
     }
   }

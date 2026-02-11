@@ -111,6 +111,16 @@ struct ContentView: View {
                 .frame(width: 150)
                 .disabled(model.isApplyingMacSystemProxy || model.macSystemProxyStateText == "Unavailable")
 
+                Toggle(isOn: transparentProxyToggleBinding) {
+                    Text("Transparent Proxy")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(primaryText)
+                }
+                .toggleStyle(.switch)
+                .frame(width: 170)
+                .disabled(model.isApplyingTransparentProxy)
+                .help("Redirect all outbound HTTP/HTTPS via pf (requires admin password)")
+
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         let nextScreen: MainScreen = (currentScreen == .traffic) ? .settings : .traffic
@@ -166,6 +176,19 @@ struct ContentView: View {
                     model.enableMacSystemProxy()
                 } else {
                     model.disableMacSystemProxy()
+                }
+            }
+        )
+    }
+
+    private var transparentProxyToggleBinding: Binding<Bool> {
+        Binding(
+            get: { model.transparentProxyEnabled },
+            set: { enabled in
+                if enabled {
+                    model.enableTransparentProxy()
+                } else {
+                    model.disableTransparentProxy()
                 }
             }
         )

@@ -119,6 +119,18 @@ final class RustProxyEngine {
         try Self.check(result)
     }
 
+    func setTransparentEnabled(_ enabled: Bool) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_transparent_enabled(h, enabled)
+        try Self.check(result)
+    }
+
+    func setTransparentPort(_ port: UInt16) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_transparent_port(h, port)
+        try Self.check(result)
+    }
+
     func clearRules() throws {
         let h = try requireHandle()
         try Self.check(crab_proxy_rules_clear(h))
