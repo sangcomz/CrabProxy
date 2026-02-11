@@ -252,6 +252,7 @@ struct RulesSettingsView: View {
     @State private var draftMapLocalRules: [MapLocalRuleInput] = []
     @State private var expandedMapLocalRuleIDs: Set<UUID> = []
     @State private var draftStatusRewriteRules: [StatusRewriteRuleInput] = []
+    @State private var expandedStatusRewriteRuleIDs: Set<UUID> = []
     @State private var didInitializeDrafts = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -268,7 +269,7 @@ struct RulesSettingsView: View {
                     .font(.custom("Avenir Next Demi Bold", size: 24))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-                Text("Allowlist / Map Local / Status Rewrite rules are applied when you press Start.")
+                Text("Allowlist / Map Local / Status Rewrite rules are applied immediately when you press Save Changes.")
                     .font(.custom("Avenir Next Medium", size: 13))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
@@ -303,6 +304,7 @@ struct RulesSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             loadDraftsFromModel(force: !didInitializeDrafts)
+            consumeStagedAllowRuleIfNeeded()
             consumeStagedMapLocalRuleIfNeeded()
         }
         .onChange(of: model.allowRules) { _, _ in
@@ -319,7 +321,7 @@ struct RulesSettingsView: View {
     private var allowListSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Allowlist")
+                Text("Allowlist (SSL Proxying)")
                     .font(.custom("Avenir Next Demi Bold", size: 18))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
@@ -334,7 +336,7 @@ struct RulesSettingsView: View {
                 .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
             if draftAllowRules.isEmpty {
-                EmptyRuleHint(text: "No allowlist rule. Empty means allow all traffic.")
+                EmptyRuleHint(text: "No allowlist rule. HTTPS is tunneled until a host is added.")
             } else {
                 ForEach($draftAllowRules) { $rule in
                     HStack(spacing: 8) {
@@ -408,6 +410,19 @@ struct RulesSettingsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
                                 VStack(alignment: .leading, spacing: 4) {
+                                    Text("Status")
+                                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                                    TextField("200", text: $rule.statusCode)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 110)
+                                }
+                                .frame(width: 110, alignment: .leading)
+                            }
+
+                            HStack(alignment: .bottom, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     Text("Source")
                                         .font(.custom("Avenir Next Demi Bold", size: 11))
                                         .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
@@ -419,23 +434,10 @@ struct RulesSettingsView: View {
                                     }
                                     .labelsHidden()
                                     .pickerStyle(.segmented)
-                                    .frame(width: 160)
+                                    .frame(maxWidth: .infinity)
                                 }
-                                .frame(width: 160, alignment: .leading)
+                                .frame(minWidth: 86, idealWidth: 92, maxWidth: 98, alignment: .leading)
 
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Status")
-                                        .font(.custom("Avenir Next Demi Bold", size: 11))
-                                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
-
-                                    TextField("200", text: $rule.statusCode)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 96)
-                                }
-                                .frame(width: 96, alignment: .leading)
-                            }
-
-                            HStack(alignment: .bottom, spacing: 10) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(rule.sourceType == .file ? "Local File" : "Inline Text")
                                         .font(.custom("Avenir Next Demi Bold", size: 11))
@@ -455,14 +457,8 @@ struct RulesSettingsView: View {
                                         }
                                     }
                                     .buttonStyle(.bordered)
-                                    .frame(width: 160, alignment: .leading)
-                                } else {
-                                    Color.clear
-                                        .frame(width: 160, height: 1)
+                                    .frame(width: 150, alignment: .leading)
                                 }
-
-                                Color.clear
-                                    .frame(width: 96, height: 1)
                             }
 
                             VStack(alignment: .leading, spacing: 4) {
@@ -539,7 +535,9 @@ struct RulesSettingsView: View {
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
                 Spacer()
                 Button("Add Rule") {
-                    draftStatusRewriteRules.append(StatusRewriteRuleInput())
+                    let newRule = StatusRewriteRuleInput()
+                    draftStatusRewriteRules.append(newRule)
+                    expandedStatusRewriteRuleIDs.insert(newRule.id)
                 }
                 .tint(CrabTheme.primaryTint(for: colorScheme))
             }
@@ -548,33 +546,83 @@ struct RulesSettingsView: View {
                 EmptyRuleHint(text: "No status-rewrite rule yet")
             } else {
                 ForEach($draftStatusRewriteRules) { $rule in
-                    HStack(spacing: 8) {
-                        TextField("Match URL prefix", text: $rule.matcher)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("From (optional)", text: $rule.fromStatusCode)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 130)
-                        Text("→")
-                            .foregroundStyle(CrabTheme.primaryText(for: colorScheme).opacity(0.85))
-                        TextField("To", text: $rule.toStatusCode)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 110)
-                        Button {
-                            draftStatusRewriteRules.removeAll { $0.id == rule.id }
-                        } label: {
-                            Image(systemName: "trash")
+                    if expandedStatusRewriteRuleIDs.contains(rule.id) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .center, spacing: 10) {
+                                Toggle("Enabled", isOn: $rule.isEnabled)
+                                    .toggleStyle(.checkbox)
+                                    .font(.custom("Avenir Next Medium", size: 12))
+                                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                                Spacer()
+                                Button("Collapse") {
+                                    expandedStatusRewriteRuleIDs.remove(rule.id)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            HStack(spacing: 8) {
+                                TextField("Match URL prefix", text: $rule.matcher)
+                                    .textFieldStyle(.roundedBorder)
+                                TextField("From (optional)", text: $rule.fromStatusCode)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 130)
+                                Text("→")
+                                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme).opacity(0.85))
+                                TextField("To", text: $rule.toStatusCode)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 110)
+                            }
+
+                            Button(role: .destructive) {
+                                draftStatusRewriteRules.removeAll { $0.id == rule.id }
+                                expandedStatusRewriteRuleIDs.remove(rule.id)
+                            } label: {
+                                Label("Delete Rule", systemImage: "trash")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(CrabTheme.ruleCardFill(for: colorScheme))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                                )
+                        )
+                    } else {
+                        HStack(spacing: 10) {
+                            Toggle("", isOn: $rule.isEnabled)
+                                .toggleStyle(.checkbox)
+                                .labelsHidden()
+                            Text(rule.matcher.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(empty URL)" : rule.matcher)
+                                .font(.custom("Menlo", size: 12))
+                                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button("Edit") {
+                                expandedStatusRewriteRuleIDs.insert(rule.id)
+                            }
+                            .buttonStyle(.bordered)
+                            Button(role: .destructive) {
+                                draftStatusRewriteRules.removeAll { $0.id == rule.id }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(CrabTheme.ruleCardFill(for: colorScheme))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                                )
+                        )
                     }
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(CrabTheme.ruleCardFill(for: colorScheme))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
-                            )
-                    )
                 }
             }
         }
@@ -591,6 +639,7 @@ struct RulesSettingsView: View {
         draftStatusRewriteRules = model.statusRewriteRules
         if force {
             expandedMapLocalRuleIDs.removeAll()
+            expandedStatusRewriteRuleIDs.removeAll()
         }
         didInitializeDrafts = true
     }
@@ -608,6 +657,19 @@ struct RulesSettingsView: View {
             draftAllowRules = model.allowRules
         }
         loadDraftsFromModel(force: true)
+    }
+
+    private func consumeStagedAllowRuleIfNeeded() {
+        guard let staged = model.consumeStagedAllowRule() else { return }
+        let matcher = staged.matcher.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !matcher.isEmpty else { return }
+        let normalized = matcher.lowercased()
+        let alreadyExists = draftAllowRules.contains {
+            $0.matcher.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized
+        }
+        if !alreadyExists {
+            draftAllowRules.append(AllowRuleInput(matcher: matcher))
+        }
     }
 
     private func consumeStagedMapLocalRuleIfNeeded() {

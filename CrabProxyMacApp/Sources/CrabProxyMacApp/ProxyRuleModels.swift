@@ -37,17 +37,20 @@ struct MapLocalRuleInput: Identifiable, Hashable {
 
 struct StatusRewriteRuleInput: Identifiable, Hashable {
     let id: UUID
+    var isEnabled: Bool
     var matcher: String
     var fromStatusCode: String
     var toStatusCode: String
 
     init(
         id: UUID = UUID(),
+        isEnabled: Bool = true,
         matcher: String = "",
         fromStatusCode: String = "",
         toStatusCode: String = "200"
     ) {
         self.id = id
+        self.isEnabled = isEnabled
         self.matcher = matcher
         self.fromStatusCode = fromStatusCode
         self.toStatusCode = toStatusCode

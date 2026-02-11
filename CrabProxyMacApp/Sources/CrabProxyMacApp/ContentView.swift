@@ -152,8 +152,6 @@ struct ContentView: View {
                     model.stopProxy()
                 }
                 .disabled(!model.isRunning)
-
-                StatusBadge(isRunning: model.isRunning, text: model.statusText)
             }
         }
         .padding(16)
@@ -243,6 +241,12 @@ struct ContentView: View {
                             TransactionRow(entry: entry)
                                 .tag(entry.id)
                                 .contextMenu {
+                                    Button("Add to Allowlist") {
+                                        model.stageAllowRule(from: entry)
+                                        settingsTabRawValue = "Rules"
+                                        currentScreenRawValue = MainScreen.settings.rawValue
+                                    }
+                                    Divider()
                                     Button("Add to Map Local") {
                                         model.stageMapLocalRule(from: entry)
                                         settingsTabRawValue = "Rules"

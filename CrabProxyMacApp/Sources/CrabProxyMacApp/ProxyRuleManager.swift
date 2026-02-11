@@ -71,6 +71,10 @@ struct ProxyRuleManager {
         }
 
         for (index, draft) in statusRewriteRules.enumerated() {
+            if !draft.isEnabled {
+                continue
+            }
+
             let matcher = trimmed(draft.matcher)
             let fromStatus = try parseOptionalStatusCode(
                 draft.fromStatusCode,

@@ -14,7 +14,7 @@ It is designed for app/API debugging on macOS and mobile devices (iOS/Android) o
 - Supports body inspection toggle (`Inspect Bodies`)
 - Supports engine-level allowlist filtering (`*.*`, domain, URL/path prefix)
 - Supports rule-based rewrites (map local / status rewrite)
-- Includes mobile certificate install portal (`http://crab-proxy.invalid/`)
+- Includes mobile certificate install portal (`http://crab-proxy.local/`)
 - Supports light/dark/system appearance
 
 ## App Layout
@@ -43,7 +43,7 @@ It is designed for app/API debugging on macOS and mobile devices (iOS/Android) o
 1. Start proxy in Crab Proxy.
 2. Open `Settings > Mobile Setup` and check your Mac LAN IP.
 3. Set phone Wi-Fi proxy to your Mac IP + port `8888`.
-4. Open `http://crab-proxy.invalid/` in phone browser.
+4. Open `http://crab-proxy.local/` in phone browser.
 5. Install certificate/profile from portal.
 
 iOS: after install, enable trust at:

@@ -24,12 +24,13 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private struct PersistedStatusRewriteRule: Codable {
+    var isEnabled: Bool?
     var matcher: String
     var fromStatusCode: String
     var toStatusCode: String
   }
 
-  let certPortalURL = "http://crab-proxy.invalid/"
+  let certPortalURL = "http://crab-proxy.local/"
   let listenAddress = "0.0.0.0:8888"
   @Published private(set) var caCertPath = ""
   @Published private(set) var caStatusText = "Preparing internal CA"
@@ -51,6 +52,7 @@ final class ProxyViewModel: ObservableObject {
   @Published private(set) var filteredLogs: [ProxyLogEntry] = []
   @Published var selectedLogID: ProxyLogEntry.ID?
   @Published var stagedMapLocalRule: MapLocalRuleInput?
+  @Published var stagedAllowRule: AllowRuleInput?
   @Published var allowRules: [AllowRuleInput] = []
   @Published var mapLocalRules: [MapLocalRuleInput] = []
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
@@ -61,7 +63,6 @@ final class ProxyViewModel: ObservableObject {
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
   private static let mapLocalRulesDefaultsKey = "CrabProxyMacApp.mapLocalRules.v1"
   private static let statusRewriteRulesDefaultsKey = "CrabProxyMacApp.statusRewriteRules.v1"
-  private static let defaultAllowRuleMatcher = "*.*"
   private let internalCACommonName = "Crab Proxy Internal Root CA"
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
@@ -301,6 +302,21 @@ final class ProxyViewModel: ObservableObject {
   func consumeStagedMapLocalRule() -> MapLocalRuleInput? {
     let rule = stagedMapLocalRule
     stagedMapLocalRule = nil
+    return rule
+  }
+
+  func stageAllowRule(from entry: ProxyLogEntry) {
+    guard let matcher = defaultAllowMatcher(from: entry.url) else {
+      statusText = "Cannot derive allowlist matcher from selected request."
+      return
+    }
+    stagedAllowRule = AllowRuleInput(matcher: matcher)
+    statusText = "Allowlist draft added. Review and save changes."
+  }
+
+  func consumeStagedAllowRule() -> AllowRuleInput? {
+    let rule = stagedAllowRule
+    stagedAllowRule = nil
     return rule
   }
 
@@ -635,14 +651,35 @@ final class ProxyViewModel: ObservableObject {
     }
     components.query = nil
     components.fragment = nil
-    if let scheme = components.scheme?.lowercased() {
-      if (scheme == "https" && components.port == 443)
-        || (scheme == "http" && components.port == 80)
-      {
-        components.port = nil
-      }
+    if let scheme = components.scheme?.lowercased(),
+      let port = components.port,
+      isDefaultPort(port, scheme: scheme)
+    {
+      components.port = nil
     }
     return components.string ?? urlString
+  }
+
+  private func defaultAllowMatcher(from urlString: String) -> String? {
+    if let components = URLComponents(string: urlString),
+      let host = components.host,
+      !host.isEmpty
+    {
+      if let port = components.port,
+        let scheme = components.scheme?.lowercased(),
+        !isDefaultPort(port, scheme: scheme)
+      {
+        return host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
+      }
+      return host
+    }
+
+    return allowMatcherCandidate(fromRawMatcher: urlString)
+  }
+
+  private func isDefaultPort(_ port: Int, scheme: String) -> Bool {
+    (scheme == "https" && port == 443)
+      || (scheme == "http" && port == 80)
   }
 
   private func mergedAllowRulesForMapLocal(
@@ -662,7 +699,7 @@ final class ProxyViewModel: ObservableObject {
         continue
       }
       guard
-        let matcher = allowMatcherCandidate(fromMapLocalMatcher: rule.matcher)
+        let matcher = allowMatcherCandidate(fromRawMatcher: rule.matcher)
       else { continue }
 
       let normalized = matcher.lowercased()
@@ -674,7 +711,7 @@ final class ProxyViewModel: ObservableObject {
     return merged
   }
 
-  private func allowMatcherCandidate(fromMapLocalMatcher raw: String) -> String? {
+  private func allowMatcherCandidate(fromRawMatcher raw: String) -> String? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
 
@@ -737,6 +774,7 @@ final class ProxyViewModel: ObservableObject {
   private func persistStatusRewriteRules() {
     let payload = statusRewriteRules.map { rule in
       PersistedStatusRewriteRule(
+        isEnabled: rule.isEnabled,
         matcher: rule.matcher,
         fromStatusCode: rule.fromStatusCode,
         toStatusCode: rule.toStatusCode
@@ -751,7 +789,7 @@ final class ProxyViewModel: ObservableObject {
     let key = Self.allowRulesDefaultsKey
 
     guard defaults.object(forKey: key) != nil else {
-      return [AllowRuleInput(matcher: Self.defaultAllowRuleMatcher)]
+      return []
     }
 
     let saved = defaults.stringArray(forKey: key) ?? []
@@ -796,6 +834,7 @@ final class ProxyViewModel: ObservableObject {
 
     return saved.map { item in
       StatusRewriteRuleInput(
+        isEnabled: item.isEnabled ?? true,
         matcher: item.matcher,
         fromStatusCode: item.fromStatusCode,
         toStatusCode: item.toStatusCode
