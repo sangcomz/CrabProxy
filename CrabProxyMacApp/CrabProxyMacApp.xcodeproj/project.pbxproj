@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2A3B4C5D6E7F8A9B0C1D2E3F /* CACertService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3B4C5D6E7F8A9B0C1D2E4F /* CACertService.swift */; };
 		41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */; };
 		50D48D2D50273FE78273AC0B /* ProxyRuleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07516C25B123D5E8595890B0 /* ProxyRuleManager.swift */; };
 		5D64D8A66477A972D3E95AA6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */; };
@@ -24,10 +25,14 @@
 		F3F2547EF444F5A2F9277945 /* NetworkInterfaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */; };
 		FA1B2C3D4E5F6A7B8C9D0E1F /* PFService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D4E5F6A7B8C9D0E2F /* PFService.swift */; };
 		FC7EFE13336BA2CD0CDFF5F2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA3842B2A162E3765D5A417 /* ContentView.swift */; };
+		AA1B2C3D4E5F6A7B8C9D0001 /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6A7B8C9D0011 /* HelperProtocol.swift */; };
+		AA1B2C3D4E5F6A7B8C9D0002 /* HelperClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6A7B8C9D0012 /* HelperClient.swift */; };
+		AA1B2C3D4E5F6A7B8C9D0003 /* HelperInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6A7B8C9D0013 /* HelperInstaller.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0199009F5ADDA57CAE7B3ADB /* ProxyRuleModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyRuleModels.swift; sourceTree = "<group>"; };
+		2A3B4C5D6E7F8A9B0C1D2E4F /* CACertService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CACertService.swift; sourceTree = "<group>"; };
 		05B578BBA9CB36B6FF2FE141 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearanceMode.swift; sourceTree = "<group>"; };
 		07516C25B123D5E8595890B0 /* ProxyRuleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyRuleManager.swift; sourceTree = "<group>"; };
@@ -45,6 +50,9 @@
 		DB162EFAACD0077B3CAE9CD9 /* CrabProxyMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrabProxyMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaceService.swift; sourceTree = "<group>"; };
 		FA1B2C3D4E5F6A7B8C9D0E2F /* PFService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PFService.swift; sourceTree = "<group>"; };
+		AA1B2C3D4E5F6A7B8C9D0011 /* HelperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperProtocol.swift; sourceTree = "<group>"; };
+		AA1B2C3D4E5F6A7B8C9D0012 /* HelperClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperClient.swift; sourceTree = "<group>"; };
+		AA1B2C3D4E5F6A7B8C9D0013 /* HelperInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperInstaller.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -90,10 +98,14 @@
 			children = (
 				05B88FED353EF1413F31B044 /* AppAppearanceMode.swift */,
 				1049CB32F1355B4E9D5FDE0D /* Assets.xcassets */,
+				2A3B4C5D6E7F8A9B0C1D2E4F /* CACertService.swift */,
 				B8C26226EB5A916FD1E4B2BC /* Components.swift */,
 				0BA3842B2A162E3765D5A417 /* ContentView.swift */,
 				3C2C8073E4A430CBB1722EDF /* CrabProxyMacApp.swift */,
 				809B137EBBC6E34E192A977C /* CrabTheme.swift */,
+				AA1B2C3D4E5F6A7B8C9D0012 /* HelperClient.swift */,
+				AA1B2C3D4E5F6A7B8C9D0013 /* HelperInstaller.swift */,
+				AA1B2C3D4E5F6A7B8C9D0011 /* HelperProtocol.swift */,
 				367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */,
 				E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */,
 				FA1B2C3D4E5F6A7B8C9D0E2F /* PFService.swift */,
@@ -211,10 +223,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				F37AA31AA7D67D9FE36F653C /* AppAppearanceMode.swift in Sources */,
+				2A3B4C5D6E7F8A9B0C1D2E3F /* CACertService.swift in Sources */,
 				F122E7F0EE979A9099B053E0 /* Components.swift in Sources */,
 				FC7EFE13336BA2CD0CDFF5F2 /* ContentView.swift in Sources */,
 				DEFFE37EE0C9D4730D0AA8F6 /* CrabProxyMacApp.swift in Sources */,
 				BC70968A3DCEB65D4FBED5B7 /* CrabTheme.swift in Sources */,
+				AA1B2C3D4E5F6A7B8C9D0002 /* HelperClient.swift in Sources */,
+				AA1B2C3D4E5F6A7B8C9D0003 /* HelperInstaller.swift in Sources */,
+				AA1B2C3D4E5F6A7B8C9D0001 /* HelperProtocol.swift in Sources */,
 				41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */,
 				F3F2547EF444F5A2F9277945 /* NetworkInterfaceService.swift in Sources */,
 				FA1B2C3D4E5F6A7B8C9D0E1F /* PFService.swift in Sources */,

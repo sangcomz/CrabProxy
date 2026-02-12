@@ -47,7 +47,7 @@ struct SettingsView: View {
             Group {
                 switch selectedTab {
                 case .general:
-                    GeneralSettingsView(appearanceModeRawValue: $appearanceModeRawValue)
+                    GeneralSettingsView(model: model, appearanceModeRawValue: $appearanceModeRawValue)
                 case .rules:
                     RulesSettingsView(model: model)
                 case .device:
@@ -71,6 +71,7 @@ struct SettingsView: View {
 }
 
 struct GeneralSettingsView: View {
+    @ObservedObject var model: ProxyViewModel
     @Binding var appearanceModeRawValue: String
     @Environment(\.colorScheme) private var colorScheme
 
@@ -104,12 +105,78 @@ struct GeneralSettingsView: View {
                     .font(.custom("Avenir Next Demi Bold", size: 24))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
+                HelperStatusRow(model: model)
+                CACertRow(model: model)
                 ThemeModeRow(selection: appearanceModeBinding)
                 AppVersionRow(version: appVersionText)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct HelperStatusRow: View {
+    @ObservedObject var model: ProxyViewModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Privileged Helper")
+                    .font(.custom("Avenir Next Demi Bold", size: 20))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                Text(model.helperInstalled
+                     ? "Installed. No admin password needed for proxy operations."
+                     : "Not installed. Install to avoid repeated password prompts.")
+                    .font(.custom("Avenir Next Medium", size: 13))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            }
+
+            Spacer(minLength: 12)
+
+            if model.helperInstalled {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+                    Text("Installed")
+                        .font(.custom("Avenir Next Demi Bold", size: 13))
+                        .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+
+                    Button("Uninstall") {
+                        model.uninstallHelper()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isInstallingHelper)
+                }
+            } else {
+                Button {
+                    model.installHelper()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "shield.checkered")
+                        Text("Install Helper")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isInstallingHelper)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CrabTheme.themeCardFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
+        .onAppear {
+            model.refreshHelperStatus()
+        }
     }
 }
 
@@ -157,6 +224,70 @@ private struct AppVersionRow: View {
                         .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
                 )
         )
+    }
+}
+
+private struct CACertRow: View {
+    @ObservedObject var model: ProxyViewModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CA Certificate")
+                    .font(.custom("Avenir Next Demi Bold", size: 20))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                Text(model.caCertInstalledInKeychain
+                     ? "Trusted in System Keychain"
+                     : "Not installed. HTTPS inspection requires a trusted CA.")
+                    .font(.custom("Avenir Next Medium", size: 13))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            }
+
+            Spacer(minLength: 12)
+
+            if model.caCertInstalledInKeychain {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+                    Text("Trusted")
+                        .font(.custom("Avenir Next Demi Bold", size: 13))
+                        .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+
+                    Button("Remove") {
+                        model.removeCACertFromKeychain()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isInstallingCACert)
+                }
+            } else {
+                Button {
+                    model.installCACertToKeychain()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.shield")
+                        Text("Install & Trust")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isInstallingCACert || model.caCertPath.isEmpty)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CrabTheme.themeCardFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
+        .onAppear {
+            model.refreshCACertKeychainStatus()
+        }
     }
 }
 

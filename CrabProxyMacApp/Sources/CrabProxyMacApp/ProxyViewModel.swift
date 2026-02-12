@@ -51,6 +51,10 @@ final class ProxyViewModel: ObservableObject {
   @Published private(set) var isApplyingTransparentProxy = false
   @Published private(set) var transparentProxyStateText = "OFF"
   @Published private(set) var isApplyingMacSystemProxy = false
+  @Published private(set) var caCertInstalledInKeychain = false
+  @Published private(set) var isInstallingCACert = false
+  @Published private(set) var helperInstalled = false
+  @Published private(set) var isInstallingHelper = false
   @Published private(set) var logs: [ProxyLogEntry] = []
   @Published private(set) var filteredLogs: [ProxyLogEntry] = []
   @Published var selectedLogID: ProxyLogEntry.ID?
@@ -70,6 +74,7 @@ final class ProxyViewModel: ObservableObject {
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
   private let transparentProxyPort: UInt16 = 8889
+  private let caCertService: any CACertServicing
   private let pfService: any PFServicing
   private let systemProxyService: any MacSystemProxyServicing
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
@@ -79,8 +84,10 @@ final class ProxyViewModel: ObservableObject {
 
   init(
     systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService(),
-    pfService: any PFServicing = LivePFService()
+    pfService: any PFServicing = LivePFService(),
+    caCertService: any CACertServicing = LiveCACertService()
   ) {
+    self.caCertService = caCertService
     self.pfService = pfService
     self.systemProxyService = systemProxyService
     allowRules = Self.loadAllowRules()
@@ -88,7 +95,9 @@ final class ProxyViewModel: ObservableObject {
     statusRewriteRules = Self.loadStatusRewriteRules()
     bindPersistence()
     refreshInternalCAStatus()
+    refreshCACertKeychainStatus()
     refreshMacSystemProxyStatus()
+    refreshHelperStatus()
     do {
       self.engine = try makeEngine()
       self.statusText = "Ready"
@@ -142,6 +151,10 @@ final class ProxyViewModel: ObservableObject {
     do {
       try engine.setListenAddress(listenAddress)
       try engine.setInspectEnabled(inspectBodies)
+      if transparentProxyEnabled {
+        try engine.setTransparentEnabled(true)
+        try engine.setTransparentPort(transparentProxyPort)
+      }
       try syncRules(to: engine)
       try ensureInternalCALoaded(engine: engine)
 
@@ -261,6 +274,7 @@ final class ProxyViewModel: ObservableObject {
     isApplyingTransparentProxy = true
     let pfService = self.pfService
     let transparentProxyPort = self.transparentProxyPort
+    let certPathToInstall = caCertInstalledInKeychain ? nil : (caCertPath.isEmpty ? nil : caCertPath)
 
     Task {
       defer { isApplyingTransparentProxy = false }
@@ -279,14 +293,17 @@ final class ProxyViewModel: ObservableObject {
         try engine.setTransparentEnabled(true)
         try engine.setTransparentPort(transparentProxyPort)
 
-        try await Task.detached(priority: .userInitiated) {
-          try pfService.enable(proxyPort: Int(transparentProxyPort))
-        }.value
+        try await pfService.enable(proxyPort: Int(transparentProxyPort), certInstallPath: certPathToInstall)
+
+        if certPathToInstall != nil {
+          caCertInstalledInKeychain = true
+        }
 
         if wasRunning {
           startProxy()
         }
 
+        transparentProxyEnabled = true
         transparentProxyStateText = "ON (port \(transparentProxyPort))"
         statusText = "Transparent proxy enabled"
       } catch {
@@ -305,9 +322,7 @@ final class ProxyViewModel: ObservableObject {
     Task {
       defer { isApplyingTransparentProxy = false }
       do {
-        try await Task.detached(priority: .userInitiated) {
-          try pfService.disable()
-        }.value
+        try await pfService.disable()
 
         if let engine {
           let wasRunning = engine.isRunning()
@@ -320,10 +335,140 @@ final class ProxyViewModel: ObservableObject {
           }
         }
 
+        transparentProxyEnabled = false
         transparentProxyStateText = "OFF"
         statusText = "Transparent proxy disabled"
       } catch {
         statusText = "Disable transparent proxy failed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func installCACertToKeychain() {
+    guard !isInstallingCACert else { return }
+    do {
+      if caCertPath.isEmpty {
+        let urls = try internalCAURLs()
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: urls.cert.path) || !fm.fileExists(atPath: urls.key.path) {
+          try RustProxyEngine.generateCA(
+            commonName: internalCACommonName,
+            days: internalCADays,
+            certPath: urls.cert.path,
+            keyPath: urls.key.path
+          )
+        }
+        refreshInternalCAStatus()
+      }
+    } catch {
+      statusText = "Prepare CA cert failed: \(error.localizedDescription)"
+      return
+    }
+
+    guard !caCertPath.isEmpty else {
+      statusText = "CA certificate path unavailable"
+      return
+    }
+    isInstallingCACert = true
+    let certPath = caCertPath
+    let caCertService = self.caCertService
+
+    Task {
+      defer { isInstallingCACert = false }
+      do {
+        try await caCertService.installToSystemKeychain(certPath: certPath)
+        caCertInstalledInKeychain = true
+        statusText = "CA certificate installed to System Keychain"
+      } catch {
+        statusText = "Install CA cert failed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func removeCACertFromKeychain() {
+    guard !isInstallingCACert else { return }
+    isInstallingCACert = true
+    let commonName = internalCACommonName
+    let caCertService = self.caCertService
+
+    Task {
+      defer { isInstallingCACert = false }
+      do {
+        try await caCertService.removeFromSystemKeychain(commonName: commonName)
+        caCertInstalledInKeychain = false
+        statusText = "CA certificate removed from System Keychain"
+      } catch {
+        statusText = "Remove CA cert failed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func refreshCACertKeychainStatus() {
+    let commonName = internalCACommonName
+    let caCertService = self.caCertService
+    Task {
+      let installed = await caCertService.isInstalledInSystemKeychain(commonName: commonName)
+      caCertInstalledInKeychain = installed
+    }
+  }
+
+  func refreshHelperStatus() {
+    let fileInstalled = HelperInstaller.isInstalled()
+    helperInstalled = fileInstalled
+    guard fileInstalled else { return }
+
+    let helperClient = HelperClient()
+    Task {
+      let available = await helperClient.isAvailable()
+      helperInstalled = available
+    }
+  }
+
+  func installHelper() {
+    guard !isInstallingHelper else { return }
+    isInstallingHelper = true
+
+    Task {
+      defer { isInstallingHelper = false }
+      do {
+        try await Task.detached(priority: .userInitiated) {
+          try HelperInstaller.install()
+        }.value
+
+        let helperClient = HelperClient()
+        var available = false
+        for _ in 0..<5 {
+          available = await helperClient.isAvailable()
+          if available {
+            break
+          }
+          try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+
+        helperInstalled = available
+        statusText = available
+          ? "Helper daemon installed"
+          : "Helper installed but daemon unavailable. Using admin prompt fallback."
+      } catch {
+        statusText = "Helper install failed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func uninstallHelper() {
+    guard !isInstallingHelper else { return }
+    isInstallingHelper = true
+
+    Task {
+      defer { isInstallingHelper = false }
+      do {
+        try await Task.detached(priority: .userInitiated) {
+          try HelperInstaller.uninstall()
+        }.value
+        helperInstalled = false
+        statusText = "Helper daemon uninstalled"
+      } catch {
+        statusText = "Helper uninstall failed: \(error.localizedDescription)"
       }
     }
   }
@@ -466,6 +611,10 @@ final class ProxyViewModel: ObservableObject {
     if runtimeWasRunning {
       try activeEngine.setListenAddress(listenAddress)
       try activeEngine.setInspectEnabled(inspectBodies)
+      if transparentProxyEnabled {
+        try activeEngine.setTransparentEnabled(true)
+        try activeEngine.setTransparentPort(transparentProxyPort)
+      }
       try ensureInternalCALoaded(engine: activeEngine)
       try activeEngine.start()
     }

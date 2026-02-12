@@ -15,61 +15,107 @@ enum PFServiceError: LocalizedError, Sendable {
 }
 
 protocol PFServicing: Sendable {
-  func enable(proxyPort: Int) throws
-  func disable() throws
+  func enable(proxyPort: Int, certInstallPath: String?) async throws
+  func disable() async throws
 }
 
 struct LivePFService: PFServicing {
-  func enable(proxyPort: Int) throws {
-    try PFService.enable(proxyPort: proxyPort)
+  private let helperClient = HelperClient()
+
+  func enable(proxyPort: Int, certInstallPath: String? = nil) async throws {
+    let pfConf = PFService.buildPFConf(proxyPort: proxyPort)
+    do {
+      try await helperClient.enablePF(pfConf: pfConf, certPath: certInstallPath)
+    } catch {
+      guard shouldFallbackToLegacy(error) else { throw error }
+      try await Task.detached(priority: .userInitiated) {
+        try PFService.enableLegacy(proxyPort: proxyPort, certInstallPath: certInstallPath)
+      }.value
+    }
   }
 
-  func disable() throws {
-    try PFService.disable()
+  func disable() async throws {
+    do {
+      try await helperClient.disablePF()
+    } catch {
+      guard shouldFallbackToLegacy(error) else { throw error }
+      try await Task.detached(priority: .userInitiated) {
+        try PFService.disableLegacy()
+      }.value
+    }
+  }
+
+  private func shouldFallbackToLegacy(_ error: Error) -> Bool {
+    if case HelperClientError.connectionFailed = error {
+      return true
+    }
+    if case HelperClientError.remoteError(let message) = error {
+      let lowered = message.lowercased()
+      return lowered.contains("xpc")
+        || lowered.contains("connection")
+        || lowered.contains("listener")
+        || lowered.contains("invalidated")
+        || lowered.contains("service")
+    }
+    return false
+  }
+}
+
+/// Fallback service that uses osascript (admin password prompt each time).
+struct LegacyPFService: PFServicing {
+  func enable(proxyPort: Int, certInstallPath: String? = nil) async throws {
+    try PFService.enableLegacy(proxyPort: proxyPort, certInstallPath: certInstallPath)
+  }
+
+  func disable() async throws {
+    try PFService.disableLegacy()
   }
 }
 
 enum PFService {
-  private static let excludePortStart = 50000
-  private static let excludePortEnd = 50099
+  static let excludePortStart = 50000
+  static let excludePortEnd = 50099
 
-  /// Enable pf transparent proxy redirect rules.
-  ///
-  /// Creates a combined pf config that includes the system defaults and adds
-  /// CrabProxy redirect rules. Uses AppleScript `do shell script ... with
-  /// administrator privileges` to get root access for pfctl.
-  static func enable(proxyPort: Int) throws {
-    // Build a pf config that loads system defaults then adds our rules.
-    // The rdr rule redirects outbound 80/443 to our transparent listener.
-    // The pass-out-quick rule lets the proxy's own upstream connections
-    // (bound to source ports 50000-50099) bypass the redirect.
-    // The route-to rule forces outbound 80/443 through lo0 where rdr catches it.
-    let pfConf = """
-      scrub-anchor "com.apple/*"
-      nat-anchor "com.apple/*"
-      rdr-anchor "com.apple/*"
-      rdr on lo0 proto tcp from any to any port {80, 443} -> 127.0.0.1 port \(proxyPort)
-      anchor "com.apple/*"
-      load anchor "com.apple" from "/etc/pf.anchors/com.apple"
-      pass out quick proto tcp from any port \(excludePortStart):\(excludePortEnd) to any no state
-      pass out route-to lo0 inet proto tcp from any to any port {80, 443} keep state
-      """
+  static func buildPFConf(proxyPort: Int) -> String {
+    """
+    scrub-anchor "com.apple/*"
+    nat-anchor "com.apple/*"
+    rdr-anchor "com.apple/*"
+    rdr on lo0 proto tcp from any to any port {80, 443} -> 127.0.0.1 port \(proxyPort)
+    anchor "com.apple/*"
+    load anchor "com.apple" from "/etc/pf.anchors/com.apple"
+    pass out quick proto tcp from any port \(excludePortStart):\(excludePortEnd) to any no state
+    pass out route-to lo0 inet proto tcp from any to any port {80, 443} keep state
+    """
+  }
 
+  // MARK: - Legacy (osascript-based) implementation
+
+  static func enableLegacy(proxyPort: Int, certInstallPath: String? = nil) throws {
+    let pfConf = buildPFConf(proxyPort: proxyPort)
     let confPath = NSTemporaryDirectory() + "crab-proxy-pf.conf"
     try pfConf.write(toFile: confPath, atomically: true, encoding: .utf8)
 
-    let script = "/sbin/pfctl -f '\(confPath)' -e 2>/dev/null; true"
+    var parts: [String] = []
+
+    if let certPath = certInstallPath {
+      let escapedCert = certPath.replacingOccurrences(of: "'", with: "'\\''")
+      parts.append(
+        "/usr/bin/security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '\(escapedCert)'"
+      )
+    }
+
+    parts.append("/sbin/pfctl -f '\(confPath)' -e 2>/dev/null; true")
+
+    let script = parts.joined(separator: " && ")
     try runWithAdminPrivileges(script)
   }
 
-  /// Disable pf transparent proxy by restoring system default rules.
-  static func disable() throws {
+  static func disableLegacy() throws {
     let script = "/sbin/pfctl -f /etc/pf.conf 2>/dev/null; true"
     try runWithAdminPrivileges(script)
   }
 
-  /// Run a shell command with admin privileges using osascript.
-  /// This triggers the standard macOS password dialog.
   private static func runWithAdminPrivileges(_ script: String) throws {
     let escaped = script
       .replacingOccurrences(of: "\\", with: "\\\\")
@@ -93,7 +139,7 @@ enum PFService {
       let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
       let errorMessage = String(data: errorData, encoding: .utf8) ?? ""
       throw PFServiceError.commandFailed(
-        command: "pfctl",
+        command: "admin",
         message: errorMessage.trimmingCharacters(in: .whitespacesAndNewlines)
       )
     }

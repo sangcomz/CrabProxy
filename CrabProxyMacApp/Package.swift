@@ -38,5 +38,9 @@ let package = Package(
                 .linkedLibrary("iconv"),
             ]
         ),
+        .executableTarget(
+            name: "CrabProxyHelper",
+            path: "Sources/CrabProxyHelper"
+        ),
     ]
 )

@@ -5,11 +5,79 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="$(cd "$APP_DIR/.." && pwd)"
 RUST_DIR="$ROOT_DIR/crab-mitm"
+HELPER_LABEL="com.sangcomz.CrabProxyHelper"
 
 PROFILE="${1:-debug}"
 if [[ "${CONFIGURATION:-}" == "Release" ]]; then
   PROFILE="release"
 fi
+
+build_helper_resource_binary() {
+  local helper_src_dir="$APP_DIR/Sources/CrabProxyHelper"
+
+  # This path is only available when the script is invoked by Xcode.
+  if [[ -z "${TARGET_BUILD_DIR:-}" || -z "${UNLOCALIZED_RESOURCES_FOLDER_PATH:-}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "$helper_src_dir/main.swift" || ! -f "$helper_src_dir/HelperProtocol.swift" ]]; then
+    echo "warning: helper sources not found, skipping helper binary packaging" >&2
+    return 0
+  fi
+
+  local resources_dir="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+  local helper_output="$resources_dir/$HELPER_LABEL"
+  local sdk_path deployment_target
+
+  sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+  deployment_target="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+  mkdir -p "$resources_dir"
+
+  IFS=' ' read -r -a helper_arches <<<"${ARCHS:-$(uname -m)}"
+  local tmp_dir
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/crabproxy-helper.XXXXXX")"
+  local arch_bins=()
+
+  for arch in "${helper_arches[@]}"; do
+    case "$arch" in
+      arm64|x86_64)
+        ;;
+      arm64e)
+        arch="arm64"
+        ;;
+      *)
+        echo "warning: unsupported helper arch '$arch', skipping" >&2
+        continue
+        ;;
+    esac
+
+    local arch_output="$tmp_dir/$arch"
+    xcrun swiftc \
+      -sdk "$sdk_path" \
+      -target "$arch-apple-macos$deployment_target" \
+      "$helper_src_dir/HelperProtocol.swift" \
+      "$helper_src_dir/main.swift" \
+      -o "$arch_output"
+    arch_bins+=("$arch_output")
+  done
+
+  if [[ ${#arch_bins[@]} -eq 0 ]]; then
+    rm -rf "$tmp_dir"
+    echo "error: failed to build helper binary for any architecture" >&2
+    return 1
+  fi
+
+  if [[ ${#arch_bins[@]} -eq 1 ]]; then
+    cp "${arch_bins[0]}" "$helper_output"
+  else
+    /usr/bin/lipo -create "${arch_bins[@]}" -output "$helper_output"
+  fi
+
+  chmod 755 "$helper_output"
+  echo "Helper binary packaged at: $helper_output"
+  /usr/bin/lipo -info "$helper_output" || true
+  rm -rf "$tmp_dir"
+}
 
 # Xcode GUI launches scripts with a restricted PATH on some setups.
 if ! command -v cargo >/dev/null 2>&1; then
@@ -87,3 +155,5 @@ echo "Rust staticlib prepared at: $OUTPUT_LIB"
 /usr/bin/lipo -info "$OUTPUT_LIB" || true
 
 cp "$RUST_DIR/include/crab_mitm.h" "$APP_DIR/Sources/CCrabMitm/include/crab_mitm.h"
+
+build_helper_resource_binary
