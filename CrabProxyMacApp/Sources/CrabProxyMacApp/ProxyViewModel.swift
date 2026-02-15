@@ -14,6 +14,40 @@ private enum ProxyViewModelError: Error, LocalizedError {
 
 @MainActor
 final class ProxyViewModel: ObservableObject {
+  enum StatusCodeCategory: String, CaseIterable, Hashable, Identifiable {
+    case info = "1xx"
+    case success = "2xx"
+    case redirect = "3xx"
+    case clientError = "4xx"
+    case serverError = "5xx"
+
+    var id: String { rawValue }
+
+    func contains(_ statusCode: Int) -> Bool {
+      switch self {
+      case .info:
+        return (100..<200).contains(statusCode)
+      case .success:
+        return (200..<300).contains(statusCode)
+      case .redirect:
+        return (300..<400).contains(statusCode)
+      case .clientError:
+        return (400..<500).contains(statusCode)
+      case .serverError:
+        return (500..<600).contains(statusCode)
+      }
+    }
+  }
+
+  struct DomainGroup: Hashable, Identifiable {
+    let domain: String
+    let count: Int
+    let hasMacOS: Bool
+    let hasMobile: Bool
+
+    var id: String { domain }
+  }
+
   private struct PersistedMapLocalRule: Codable {
     var isEnabled: Bool?
     var matcher: String
@@ -42,6 +76,9 @@ final class ProxyViewModel: ObservableObject {
   @Published var isRunning = false
   @Published var statusText = "Stopped"
   @Published var visibleURLFilter = "" {
+    didSet { rebuildFilteredLogs() }
+  }
+  @Published var statusCodeFilter: Set<StatusCodeCategory> = [] {
     didSet { rebuildFilteredLogs() }
   }
   @Published private(set) var macSystemProxyEnabled = false
@@ -114,6 +151,32 @@ final class ProxyViewModel: ObservableObject {
 
   var selectedLog: ProxyLogEntry? {
     logStore.selectedLog(id: selectedLogID)
+  }
+
+  var groupedByDomain: [DomainGroup] {
+    let grouped = Dictionary(grouping: filteredLogs) { entry in
+      domainName(from: entry.url)
+    }
+    return grouped
+      .map { domain, entries in
+        DomainGroup(
+          domain: domain,
+          count: entries.count,
+          hasMacOS: entries.contains { $0.clientPlatform == .macOS },
+          hasMobile: entries.contains { $0.clientPlatform == .mobile }
+        )
+      }
+      .sorted {
+        if $0.count == $1.count {
+          return $0.domain < $1.domain
+        }
+        return $0.count > $1.count
+      }
+  }
+
+  func filteredLogs(forDomain domain: String?) -> [ProxyLogEntry] {
+    guard let domain else { return filteredLogs }
+    return filteredLogs.filter { domainName(from: $0.url) == domain }
   }
 
   var parsedListen: (host: String, port: UInt16) {
@@ -838,18 +901,30 @@ final class ProxyViewModel: ObservableObject {
 
   private func rebuildFilteredLogs() {
     let needle = trimmed(visibleURLFilter)
-    guard !needle.isEmpty else {
-      filteredLogs = logs
-      return
-    }
     filteredLogs = logs.filter { entry in
-      entry.url.localizedCaseInsensitiveContains(needle)
+      let matchesText = needle.isEmpty
+        || entry.url.localizedCaseInsensitiveContains(needle)
         || entry.rawLine.localizedCaseInsensitiveContains(needle)
+      let matchesStatus = statusCodeFilter.isEmpty
+        || statusCodeCategory(for: entry.statusCode).map { statusCodeFilter.contains($0) } == true
+      return matchesText && matchesStatus
     }
+  }
+
+  private func statusCodeCategory(for raw: String?) -> StatusCodeCategory? {
+    guard let raw, let value = Int(raw) else { return nil }
+    return StatusCodeCategory.allCases.first { $0.contains(value) }
   }
 
   private func trimmed(_ value: String) -> String {
     value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func domainName(from urlString: String) -> String {
+    if let host = URLComponents(string: urlString)?.host, !host.isEmpty {
+      return host.lowercased()
+    }
+    return "(unknown)"
   }
 
   private func bindPersistence() {

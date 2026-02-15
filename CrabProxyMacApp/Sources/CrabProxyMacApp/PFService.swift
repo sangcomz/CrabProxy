@@ -20,44 +20,16 @@ protocol PFServicing: Sendable {
 }
 
 struct LivePFService: PFServicing {
-  private let helperClient = HelperClient()
-
   func enable(proxyPort: Int, certInstallPath: String? = nil) async throws {
-    let pfConf = PFService.buildPFConf(proxyPort: proxyPort)
-    do {
-      try await helperClient.enablePF(pfConf: pfConf, certPath: certInstallPath)
-    } catch {
-      guard shouldFallbackToLegacy(error) else { throw error }
-      try await Task.detached(priority: .userInitiated) {
-        try PFService.enableLegacy(proxyPort: proxyPort, certInstallPath: certInstallPath)
-      }.value
-    }
+    try await Task.detached(priority: .userInitiated) {
+      try PFService.enableLegacy(proxyPort: proxyPort, certInstallPath: certInstallPath)
+    }.value
   }
 
   func disable() async throws {
-    do {
-      try await helperClient.disablePF()
-    } catch {
-      guard shouldFallbackToLegacy(error) else { throw error }
-      try await Task.detached(priority: .userInitiated) {
-        try PFService.disableLegacy()
-      }.value
-    }
-  }
-
-  private func shouldFallbackToLegacy(_ error: Error) -> Bool {
-    if case HelperClientError.connectionFailed = error {
-      return true
-    }
-    if case HelperClientError.remoteError(let message) = error {
-      let lowered = message.lowercased()
-      return lowered.contains("xpc")
-        || lowered.contains("connection")
-        || lowered.contains("listener")
-        || lowered.contains("invalidated")
-        || lowered.contains("service")
-    }
-    return false
+    try await Task.detached(priority: .userInitiated) {
+      try PFService.disableLegacy()
+    }.value
   }
 }
 

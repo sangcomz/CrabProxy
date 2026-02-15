@@ -1,5 +1,10 @@
 import Foundation
 
+enum ClientPlatform: String, Hashable {
+    case macOS = "macOS"
+    case mobile = "Mobile"
+}
+
 struct ProxyLogEntry: Identifiable, Hashable {
     let id: UUID
     let timestamp: Date
@@ -12,6 +17,9 @@ struct ProxyLogEntry: Identifiable, Hashable {
     let statusCode: String?
     let peer: String?
     let mapLocalMatcher: String?
+    var clientPlatform: ClientPlatform?
+    let durationMs: Double?
+    var responseSizeBytes: Int64?
     var requestHeaders: String?
     var responseHeaders: String?
     var requestBodyPreview: String?
@@ -24,12 +32,16 @@ private struct PendingTransactionMeta {
     var responseHeaders: String?
     var requestBodyPreview: String?
     var responseBodyPreview: String?
+    var responseSizeBytes: Int64?
+    var clientPlatform: ClientPlatform?
 
     var isEmpty: Bool {
         requestHeaders == nil
             && responseHeaders == nil
             && requestBodyPreview == nil
             && responseBodyPreview == nil
+            && responseSizeBytes == nil
+            && clientPlatform == nil
     }
 
     mutating func merge(_ other: PendingTransactionMeta) {
@@ -37,6 +49,8 @@ private struct PendingTransactionMeta {
         if let value = other.responseHeaders { responseHeaders = value }
         if let value = other.requestBodyPreview { requestBodyPreview = value }
         if let value = other.responseBodyPreview { responseBodyPreview = value }
+        if let value = other.responseSizeBytes { responseSizeBytes = value }
+        if let value = other.clientPlatform { clientPlatform = value }
     }
 }
 
@@ -175,6 +189,9 @@ final class ProxyLogStore {
             let status = statusField(in: object)
             let peer = stringField("peer", in: object)
             let mapLocal = stringField("map_local", in: object)
+            let clientPlatform = inferClientPlatform(requestHeaders: nil, peer: peer)
+            let durationMs = doubleField("duration_ms", in: object)
+            let responseSizeBytes = int64Field("response_size_bytes", in: object)
             let requestID = stringField("request_id", in: object)
             let correlationKey = transactionKey(
                 requestID: requestID,
@@ -195,6 +212,9 @@ final class ProxyLogStore {
                     statusCode: status,
                     peer: peer,
                     mapLocalMatcher: mapLocal,
+                    clientPlatform: clientPlatform,
+                    durationMs: durationMs,
+                    responseSizeBytes: responseSizeBytes,
                     requestHeaders: nil,
                     responseHeaders: nil,
                     requestBodyPreview: nil,
@@ -224,7 +244,14 @@ final class ProxyLogStore {
             case "request_headers":
                 let headersB64 = stringField("headers_b64", in: object) ?? ""
                 let decoded = decodeHeaderPreview(headersB64) ?? "<failed to decode headers>"
-                return .metadata(key: key, meta: PendingTransactionMeta(requestHeaders: decoded))
+                let clientPlatform = inferClientPlatform(requestHeaders: decoded, peer: peer)
+                return .metadata(
+                    key: key,
+                    meta: PendingTransactionMeta(
+                        requestHeaders: decoded,
+                        clientPlatform: clientPlatform
+                    )
+                )
             case "response_headers":
                 let headersB64 = stringField("headers_b64", in: object) ?? ""
                 let decoded = decodeHeaderPreview(headersB64) ?? "<failed to decode headers>"
@@ -233,11 +260,18 @@ final class ProxyLogStore {
                 let direction = stringField("direction", in: object) ?? ""
                 let sampleB64 = stringField("sample_b64", in: object) ?? ""
                 let preview = decodeBodyPreview(sampleB64)
+                let bodyBytes = int64Field("body_bytes", in: object)
                 if direction == "request" {
                     return .metadata(key: key, meta: PendingTransactionMeta(requestBodyPreview: preview))
                 }
                 if direction == "response" {
-                    return .metadata(key: key, meta: PendingTransactionMeta(responseBodyPreview: preview))
+                    return .metadata(
+                        key: key,
+                        meta: PendingTransactionMeta(
+                            responseBodyPreview: preview,
+                            responseSizeBytes: bodyBytes
+                        )
+                    )
                 }
                 return .ignore
             default:
@@ -256,6 +290,107 @@ final class ProxyLogStore {
             return number.stringValue
         }
         return nil
+    }
+
+    private func doubleField(_ key: String, in object: [String: Any]) -> Double? {
+        if let value = object[key] as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = object[key] as? String {
+            return Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private func int64Field(_ key: String, in object: [String: Any]) -> Int64? {
+        if let value = object[key] as? NSNumber {
+            return value.int64Value
+        }
+        if let value = object[key] as? String {
+            return Int64(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private func inferClientPlatform(requestHeaders: String?, peer: String?) -> ClientPlatform? {
+        if let ua = userAgent(from: requestHeaders) {
+            let normalizedUA = ua.lowercased()
+            if normalizedUA.contains("iphone")
+                || normalizedUA.contains("ipad")
+                || normalizedUA.contains("ipod")
+                || normalizedUA.contains("android")
+                || normalizedUA.contains("mobile")
+            {
+                return .mobile
+            }
+            if normalizedUA.contains("macintosh") || normalizedUA.contains("mac os x") {
+                return .macOS
+            }
+        }
+
+        guard let host = hostFromPeer(peer) else { return nil }
+        if isLoopbackHost(host) {
+            return .macOS
+        }
+        if isLikelyLANHost(host) {
+            return .mobile
+        }
+        return nil
+    }
+
+    private func userAgent(from headers: String?) -> String? {
+        guard let headers else { return nil }
+        for rawLine in headers.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, let separator = line.firstIndex(of: ":") else { continue }
+            let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name.caseInsensitiveCompare("User-Agent") == .orderedSame else { continue }
+            let valueStart = line.index(after: separator)
+            let value = line[valueStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
+    private func hostFromPeer(_ peer: String?) -> String? {
+        guard var peer else { return nil }
+        peer = peer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !peer.isEmpty else { return nil }
+
+        if peer.hasPrefix("["),
+           let closing = peer.firstIndex(of: "]")
+        {
+            let hostStart = peer.index(after: peer.startIndex)
+            return String(peer[hostStart..<closing]).lowercased()
+        }
+
+        if let lastColon = peer.lastIndex(of: ":") {
+            return String(peer[..<lastColon]).lowercased()
+        }
+
+        return peer.lowercased()
+    }
+
+    private func isLoopbackHost(_ host: String) -> Bool {
+        host == "127.0.0.1"
+            || host == "::1"
+            || host == "localhost"
+    }
+
+    private func isLikelyLANHost(_ host: String) -> Bool {
+        if host.hasPrefix("10.") || host.hasPrefix("192.168.") || host.hasPrefix("169.254.") {
+            return true
+        }
+        if host.hasPrefix("172.") {
+            let parts = host.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
+                return true
+            }
+        }
+        if host.hasPrefix("fe80:") || host.hasPrefix("fd") || host.hasPrefix("fc") {
+            return true
+        }
+        return false
     }
 
     private func statusField(in object: [String: Any]) -> String? {
@@ -303,6 +438,7 @@ final class ProxyLogStore {
         let statusCode = Self.firstCapture(Self.statusRegex, in: line)
             ?? Self.firstCapture(Self.responseStatusRegex, in: line)
         let peer = Self.firstCapture(Self.peerRegex, in: line)
+        let clientPlatform = inferClientPlatform(requestHeaders: nil, peer: peer)
         let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
         let mapLocal = Self.firstCapture(Self.mapLocalRegex, in: line)
 
@@ -318,6 +454,9 @@ final class ProxyLogStore {
             statusCode: statusCode,
             peer: peer,
             mapLocalMatcher: mapLocal,
+            clientPlatform: clientPlatform,
+            durationMs: nil,
+            responseSizeBytes: nil,
             requestHeaders: nil,
             responseHeaders: nil,
             requestBodyPreview: nil,
@@ -417,6 +556,8 @@ final class ProxyLogStore {
         if let value = meta.responseHeaders { entry.responseHeaders = value }
         if let value = meta.requestBodyPreview { entry.requestBodyPreview = value }
         if let value = meta.responseBodyPreview { entry.responseBodyPreview = value }
+        if let value = meta.responseSizeBytes { entry.responseSizeBytes = value }
+        if let value = meta.clientPlatform { entry.clientPlatform = value }
     }
 
     private func decodeBase64Text(_ value: String) -> String? {

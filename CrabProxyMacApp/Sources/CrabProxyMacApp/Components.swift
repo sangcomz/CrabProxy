@@ -576,6 +576,7 @@ struct LabeledField: View {
     let title: String
     let placeholder: String
     @Binding var text: String
+    var focus: FocusState<Bool>.Binding? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -585,6 +586,29 @@ struct LabeledField: View {
                 .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 .frame(width: 52, alignment: .leading)
 
+            fieldView
+        }
+    }
+
+    @ViewBuilder
+    private var fieldView: some View {
+        if let focus {
+            TextField(placeholder, text: $text)
+                .focused(focus)
+                .font(.custom("Avenir Next Medium", size: 12))
+                .textFieldStyle(.plain)
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(CrabTheme.inputFill(for: colorScheme))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
+                        )
+                )
+        } else {
             TextField(placeholder, text: $text)
                 .font(.custom("Avenir Next Medium", size: 12))
                 .textFieldStyle(.plain)

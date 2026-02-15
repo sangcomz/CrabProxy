@@ -35,6 +35,12 @@ struct StatusRewriteRuleConfig {
     var toStatusCode: UInt16
 }
 
+enum CAKeyAlgorithm: UInt32 {
+    case ecdsaP256 = 0
+    case rsa2048 = 1
+    case rsa4096 = 2
+}
+
 private final class RustLogCallbackContext {
     weak var engine: RustProxyEngine?
 
@@ -102,11 +108,17 @@ final class RustProxyEngine {
         try Self.check(result)
     }
 
-    static func generateCA(commonName: String, days: UInt32, certPath: String, keyPath: String) throws {
+    static func generateCA(
+        commonName: String,
+        days: UInt32,
+        certPath: String,
+        keyPath: String,
+        algorithm: CAKeyAlgorithm = .ecdsaP256
+    ) throws {
         let result = commonName.withCString { cn in
             certPath.withCString { cert in
                 keyPath.withCString { key in
-                    crab_ca_generate(cn, days, cert, key)
+                    crab_ca_generate_with_algorithm(cn, days, cert, key, algorithm.rawValue)
                 }
             }
         }

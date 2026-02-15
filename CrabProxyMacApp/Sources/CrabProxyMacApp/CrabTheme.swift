@@ -161,4 +161,29 @@ enum CrabTheme {
   static func backgroundGradient(for scheme: ColorScheme) -> [Color] {
     palette(for: scheme).backgroundGradient
   }
+
+  static func statusCodeColor(for code: String?, scheme: ColorScheme) -> Color {
+    guard let code, let value = Int(code) else {
+      return secondaryText(for: scheme)
+    }
+
+    switch value {
+    case 100..<200:
+      return neutralTint(for: scheme)
+    case 200..<300:
+      return scheme == .dark
+        ? Color(red: 0.35, green: 0.84, blue: 0.53)
+        : Color(red: 0.12, green: 0.63, blue: 0.29)
+    case 300..<400:
+      return scheme == .dark
+        ? Color(red: 0.41, green: 0.69, blue: 0.97)
+        : Color(red: 0.12, green: 0.46, blue: 0.84)
+    case 400..<500:
+      return warningTint(for: scheme)
+    case 500..<600:
+      return destructiveTint(for: scheme)
+    default:
+      return secondaryText(for: scheme)
+    }
+  }
 }

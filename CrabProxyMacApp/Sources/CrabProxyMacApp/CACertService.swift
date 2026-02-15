@@ -18,53 +18,20 @@ protocol CACertServicing: Sendable {
 }
 
 struct LiveCACertService: CACertServicing {
-  private let helperClient = HelperClient()
-
   func installToSystemKeychain(certPath: String) async throws {
-    do {
-      try await helperClient.installCert(certPath: certPath)
-    } catch {
-      guard shouldFallbackToLegacy(error) else { throw error }
-      try await Task.detached(priority: .userInitiated) {
-        try LegacyCACertService.install(certPath: certPath)
-      }.value
-    }
+    try await Task.detached(priority: .userInitiated) {
+      try LegacyCACertService.install(certPath: certPath)
+    }.value
   }
 
   func removeFromSystemKeychain(commonName: String) async throws {
-    do {
-      try await helperClient.removeCert(commonName: commonName)
-    } catch {
-      guard shouldFallbackToLegacy(error) else { throw error }
-      try await Task.detached(priority: .userInitiated) {
-        try LegacyCACertService.remove(commonName: commonName)
-      }.value
-    }
+    try await Task.detached(priority: .userInitiated) {
+      try LegacyCACertService.remove(commonName: commonName)
+    }.value
   }
 
   func isInstalledInSystemKeychain(commonName: String) async -> Bool {
-    if await helperClient.checkCert(commonName: commonName) {
-      return true
-    }
-    if await helperClient.isAvailable() {
-      return false
-    }
     return LegacyCACertService.isInstalled(commonName: commonName)
-  }
-
-  private func shouldFallbackToLegacy(_ error: Error) -> Bool {
-    if case HelperClientError.connectionFailed = error {
-      return true
-    }
-    if case HelperClientError.remoteError(let message) = error {
-      let lowered = message.lowercased()
-      return lowered.contains("xpc")
-        || lowered.contains("connection")
-        || lowered.contains("listener")
-        || lowered.contains("invalidated")
-        || lowered.contains("service")
-    }
-    return false
   }
 }
 
