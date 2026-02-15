@@ -6,10 +6,15 @@ struct ContentView: View {
     @Binding var appearanceModeRawValue: String
     @AppStorage("CrabProxyMacApp.currentScreen") private var currentScreenRawValue = MainScreen.traffic.rawValue
     @AppStorage("CrabProxyMacApp.settingsTab") private var settingsTabRawValue = "General"
+    @AppStorage("CrabProxyMacApp.pinnedDomains.v1") private var pinnedDomainsRawValue = ""
     @State private var animateBackground = false
     @State private var detailTab: DetailTab = .summary
     @State private var isTrafficListAtTop = true
     @State private var selectedDomain: String?
+    @State private var pinnedDomains: Set<String> = []
+    @State private var pinnedSectionExpanded = true
+    @State private var domainsSectionExpanded = true
+    @State private var selectedClientFilter: ClientLabelFilter = .all
     @FocusState private var isFilterFieldFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
     private let trafficTopAnchorID = "traffic-list-top-anchor"
@@ -31,14 +36,18 @@ struct ContentView: View {
         .frame(minWidth: 1100, minHeight: 720)
         .onAppear {
             model.refreshMacSystemProxyStatus()
+            pinnedDomains = decodePinnedDomains(from: pinnedDomainsRawValue)
             withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
                 animateBackground = true
             }
         }
-        .onChange(of: model.groupedByDomain.map(\.domain)) { _, domains in
+        .onChange(of: groupedDomains.map(\.domain)) { _, domains in
             if let selectedDomain, !domains.contains(selectedDomain) {
                 self.selectedDomain = nil
             }
+        }
+        .onChange(of: pinnedDomains) { _, domains in
+            pinnedDomainsRawValue = encodePinnedDomains(domains)
         }
         .background(
             WindowAccessor { window in
@@ -84,16 +93,51 @@ struct ContentView: View {
         MainScreen(rawValue: currentScreenRawValue) ?? .traffic
     }
 
+    private var scopedLogs: [ProxyLogEntry] {
+        model.filteredLogs.filter { entry in
+            selectedClientFilter.matches(entry.clientPlatform)
+        }
+    }
+
     private var displayedTrafficLogs: [ProxyLogEntry] {
-        Array(model.filteredLogs(forDomain: selectedDomain).reversed())
+        Array(filteredLogs(forDomain: selectedDomain, in: scopedLogs).reversed())
+    }
+
+    private var groupedDomains: [ProxyViewModel.DomainGroup] {
+        let grouped = Dictionary(grouping: scopedLogs) { entry in
+            domainName(from: entry.url)
+        }
+        return grouped
+            .map { domain, entries in
+                ProxyViewModel.DomainGroup(
+                    domain: domain,
+                    count: entries.count,
+                    hasMacOS: entries.contains { $0.clientPlatform == .macOS },
+                    hasMobile: entries.contains { $0.clientPlatform == .mobile }
+                )
+            }
+            .sorted {
+                if $0.count == $1.count {
+                    return $0.domain < $1.domain
+                }
+                return $0.count > $1.count
+            }
+    }
+
+    private var pinnedDomainGroups: [ProxyViewModel.DomainGroup] {
+        groupedDomains.filter { pinnedDomains.contains($0.domain) }
+    }
+
+    private var unpinnedDomainGroups: [ProxyViewModel.DomainGroup] {
+        groupedDomains.filter { !pinnedDomains.contains($0.domain) }
     }
 
     private var allDomainHasMacOS: Bool {
-        model.filteredLogs.contains { $0.clientPlatform == .macOS }
+        scopedLogs.contains { $0.clientPlatform == .macOS }
     }
 
     private var allDomainHasMobile: Bool {
-        model.filteredLogs.contains { $0.clientPlatform == .mobile }
+        scopedLogs.contains { $0.clientPlatform == .mobile }
     }
 
     @ViewBuilder
@@ -193,10 +237,10 @@ struct ContentView: View {
     private var trafficSplitView: some View {
         HSplitView {
             domainsPanel
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 280, maxHeight: .infinity)
+                .frame(minWidth: 220, idealWidth: 320, maxWidth: 620, maxHeight: .infinity)
                 .layoutPriority(1)
             transactionsPanel
-                .frame(minWidth: 360, idealWidth: 520, maxWidth: 700, maxHeight: .infinity)
+                .frame(minWidth: 320, idealWidth: 500, maxWidth: 900, maxHeight: .infinity)
                 .layoutPriority(1)
             detailsPanel
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
@@ -215,32 +259,75 @@ struct ContentView: View {
 
     private var domainsPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Domains")
-                .font(.custom("Avenir Next Demi Bold", size: 18))
+            HStack(spacing: 8) {
+                ActionButton(
+                    title: "Clear",
+                    icon: "trash.fill",
+                    tint: secondaryTint
+                ) {
+                    model.clearLogs()
+                }
+                Spacer(minLength: 0)
+            }
+
+            TextField("Show only traffic URLs containing...", text: $model.visibleURLFilter)
+                .focused($isFilterFieldFocused)
+                .font(.custom("Avenir Next Medium", size: 12))
+                .textFieldStyle(.plain)
                 .foregroundStyle(primaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(CrabTheme.inputFill(for: colorScheme))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
+                        )
+                )
+            clientFilterChips
 
             List(selection: $selectedDomain) {
                 DomainRow(
-                    title: "All",
-                    count: model.filteredLogs.count,
+                    title: "All Traffic",
+                    count: scopedLogs.count,
                     hasMacOS: allDomainHasMacOS,
                     hasMobile: allDomainHasMobile,
-                    isSelected: selectedDomain == nil
+                    isSelected: selectedDomain == nil,
+                    isPinned: false
                 )
                 .tag(Optional<String>.none)
                 .listRowBackground(Color.clear)
 
-                ForEach(model.groupedByDomain) { group in
-                    DomainRow(
-                        title: group.domain,
-                        count: group.count,
-                        hasMacOS: group.hasMacOS,
-                        hasMobile: group.hasMobile,
-                        isSelected: selectedDomain == group.domain
-                    )
-                    .tag(Optional(group.domain))
-                    .listRowBackground(Color.clear)
+                DisclosureGroup(isExpanded: $pinnedSectionExpanded) {
+                    if pinnedDomainGroups.isEmpty {
+                        SidebarHintRow(text: "No pinned domains")
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(pinnedDomainGroups) { group in
+                            domainSelectionRow(group: group, isPinned: true)
+                        }
+                    }
                 }
+                label: {
+                    SidebarSectionLabel(title: "Pinned", symbol: "pin.fill", count: pinnedDomainGroups.count)
+                }
+                .listRowBackground(Color.clear)
+
+                DisclosureGroup(isExpanded: $domainsSectionExpanded) {
+                    if unpinnedDomainGroups.isEmpty {
+                        SidebarHintRow(text: "No domains captured")
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(unpinnedDomainGroups) { group in
+                            domainSelectionRow(group: group, isPinned: false)
+                        }
+                    }
+                }
+                label: {
+                    SidebarSectionLabel(title: "Domains", symbol: "globe", count: groupedDomains.count)
+                }
+                .listRowBackground(Color.clear)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -251,34 +338,99 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    @ViewBuilder
+    private func domainSelectionRow(group: ProxyViewModel.DomainGroup, isPinned: Bool) -> some View {
+        DomainRow(
+            title: group.domain,
+            count: group.count,
+            hasMacOS: group.hasMacOS,
+            hasMobile: group.hasMobile,
+            isSelected: selectedDomain == group.domain,
+            isPinned: isPinned
+        )
+        .tag(Optional(group.domain))
+        .listRowBackground(Color.clear)
+        .contextMenu {
+            Button(isPinned ? "Unpin Domain" : "Pin Domain") {
+                togglePin(for: group.domain)
+            }
+        }
+    }
+
+    private func togglePin(for domain: String) {
+        if pinnedDomains.contains(domain) {
+            pinnedDomains.remove(domain)
+        } else {
+            pinnedDomains.insert(domain)
+        }
+    }
+
+    private func decodePinnedDomains(from rawValue: String) -> Set<String> {
+        Set(
+            rawValue
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private func encodePinnedDomains(_ domains: Set<String>) -> String {
+        domains.sorted().joined(separator: "\n")
+    }
+
+    private var clientFilterChips: some View {
+        HStack(spacing: 6) {
+            ForEach(ClientLabelFilter.allCases) { filter in
+                Button {
+                    selectedClientFilter = filter
+                } label: {
+                    Text(filter.rawValue)
+                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                        .foregroundStyle(
+                            selectedClientFilter == filter
+                                ? Color.white.opacity(0.95)
+                                : primaryText.opacity(0.9)
+                        )
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(
+                                    selectedClientFilter == filter
+                                        ? primaryTint.opacity(0.92)
+                                        : CrabTheme.softFill(for: colorScheme)
+                                )
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(
+                                            selectedClientFilter == filter
+                                                ? primaryTint.opacity(0.95)
+                                                : panelStroke,
+                                            lineWidth: 1
+                                        )
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func filteredLogs(forDomain domain: String?, in entries: [ProxyLogEntry]) -> [ProxyLogEntry] {
+        guard let domain else { return entries }
+        return entries.filter { domainName(from: $0.url) == domain }
+    }
+
+    private func domainName(from urlString: String) -> String {
+        if let host = URLComponents(string: urlString)?.host, !host.isEmpty {
+            return host.lowercased()
+        }
+        return "(unknown)"
+    }
+
     private var transactionsPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Traffic")
-                    .font(.custom("Avenir Next Demi Bold", size: 18))
-                    .foregroundStyle(primaryText)
-                Spacer()
-                ActionButton(
-                    title: "Clear",
-                    icon: "trash.fill",
-                    tint: secondaryTint
-                ) {
-                    model.clearLogs()
-                }
-                Text("\(model.filteredLogs.count)")
-                    .font(.custom("Avenir Next Demi Bold", size: 11))
-                    .foregroundStyle(primaryText)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Capsule(style: .continuous).fill(CrabTheme.softFill(for: colorScheme)))
-            }
-
-            LabeledField(
-                title: "Filter",
-                placeholder: "Show only traffic URLs containing...",
-                text: $model.visibleURLFilter,
-                focus: $isFilterFieldFocused
-            )
             statusFilterChips
 
             ScrollViewReader { scrollProxy in
@@ -302,6 +454,11 @@ struct ContentView: View {
                                     Divider()
                                     Button("Add to Map Local") {
                                         model.stageMapLocalRule(from: entry)
+                                        settingsTabRawValue = "Rules"
+                                        currentScreenRawValue = MainScreen.settings.rawValue
+                                    }
+                                    Button("Add to Rewrite") {
+                                        model.stageStatusRewriteRule(from: entry)
                                         settingsTabRawValue = "Rules"
                                         currentScreenRawValue = MainScreen.settings.rawValue
                                     }
@@ -341,10 +498,6 @@ struct ContentView: View {
 
     private var detailsPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Detail")
-                .font(.custom("Avenir Next Demi Bold", size: 18))
-                .foregroundStyle(primaryText)
-
             if let entry = model.selectedLog {
                 Picker("", selection: $detailTab) {
                     ForEach(DetailTab.allCases) { tab in
@@ -648,6 +801,25 @@ private enum MainScreen: String {
     case settings
 }
 
+private enum ClientLabelFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case macOS = "macOS"
+    case mobile = "Mobile"
+
+    var id: String { rawValue }
+
+    func matches(_ platform: ClientPlatform?) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .macOS:
+            return platform == .macOS
+        case .mobile:
+            return platform == .mobile
+        }
+    }
+}
+
 private struct TrafficListTopMarker: View {
     @Binding var isAtTop: Bool
 
@@ -746,12 +918,54 @@ private struct StatusFilterChip: View {
     }
 }
 
+private struct SidebarSectionLabel: View {
+    let title: String
+    let symbol: String
+    let count: Int
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            Text(title)
+                .font(.custom("Avenir Next Demi Bold", size: 12))
+                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+            Spacer(minLength: 8)
+            Text("\(count)")
+                .font(.custom("Menlo", size: 10))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(CrabTheme.softFill(for: colorScheme))
+                )
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct SidebarHintRow: View {
+    let text: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            .font(.custom("Avenir Next Medium", size: 11))
+            .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            .padding(.vertical, 4)
+    }
+}
+
 private struct DomainRow: View {
     let title: String
     let count: Int
     let hasMacOS: Bool
     let hasMobile: Bool
     let isSelected: Bool
+    let isPinned: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -770,6 +984,11 @@ private struct DomainRow: View {
             }
             if hasMobile {
                 platformBadge(title: "Mobile")
+            }
+            if isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
             }
 
             Spacer(minLength: 8)

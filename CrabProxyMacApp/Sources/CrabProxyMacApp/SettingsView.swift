@@ -35,13 +35,16 @@ struct SettingsView: View {
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
                 Spacer()
-
-                Picker("Settings Tab", selection: selectedTabBinding) {
+            }
+            .frame(maxWidth: .infinity)
+            .overlay {
+                Picker("", selection: selectedTabBinding) {
                     ForEach(SettingsTab.allCases) { tab in
                         Text(tab.rawValue).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(width: 460)
             }
 
@@ -254,6 +257,15 @@ private struct AdvancedSettingsView: View {
                     .font(.custom("Avenir Next Demi Bold", size: 24))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
+                ThrottleAdvancedRow(
+                    isEnabled: $model.throttleEnabled,
+                    latencyMs: $model.throttleLatencyMs,
+                    downstreamKbps: $model.throttleDownstreamKbps,
+                    upstreamKbps: $model.throttleUpstreamKbps,
+                    onlySelectedHosts: $model.throttleOnlySelectedHosts,
+                    selectedHosts: $model.throttleSelectedHosts
+                )
+
                 InspectBodiesAdvancedRow(isInspectBodiesEnabled: $model.inspectBodies)
 
                 TransparentProxyAdvancedRow(
@@ -266,6 +278,360 @@ private struct AdvancedSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct ThrottleAdvancedRow: View {
+    @Binding var isEnabled: Bool
+    @Binding var latencyMs: Int
+    @Binding var downstreamKbps: Int
+    @Binding var upstreamKbps: Int
+    @Binding var onlySelectedHosts: Bool
+    @Binding var selectedHosts: [String]
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var newHostPattern = ""
+
+    private enum ThrottlePreset: String, CaseIterable, Hashable {
+        case modem56
+        case isdn256
+        case isdn512
+        case adsl2m
+        case adsl2_8m
+        case adsl2Plus16m
+        case vdsl32m
+        case fibre32m
+        case fibre100m
+        case threeG
+        case fourG
+        case custom
+
+        var title: String {
+            switch self {
+            case .modem56:
+                return "56 kbps Modem"
+            case .isdn256:
+                return "256 kbps ISDN/DSL"
+            case .isdn512:
+                return "512 kbps ISDN/DSL"
+            case .adsl2m:
+                return "2 Mbps ADSL"
+            case .adsl2_8m:
+                return "8 Mbps ADSL2"
+            case .adsl2Plus16m:
+                return "16 Mbps ADSL2+"
+            case .vdsl32m:
+                return "32 Mbps VDSL"
+            case .fibre32m:
+                return "32 Mbps Fibre"
+            case .fibre100m:
+                return "100 Mbps Fibre"
+            case .threeG:
+                return "3G"
+            case .fourG:
+                return "4G"
+            case .custom:
+                return "Custom"
+            }
+        }
+
+        var detail: String? {
+            switch self {
+            case .modem56:
+                return "~56 Kbps / 500 ms"
+            case .isdn256:
+                return "~256 Kbps / 200 ms"
+            case .isdn512:
+                return "~512 Kbps / 140 ms"
+            case .adsl2m:
+                return "~2 Mbps / 90 ms"
+            case .adsl2_8m:
+                return "~8 Mbps / 60 ms"
+            case .adsl2Plus16m:
+                return "~16 Mbps / 45 ms"
+            case .vdsl32m:
+                return "~32 Mbps (asymmetric) / 35 ms"
+            case .fibre32m:
+                return "~32 Mbps (symmetric) / 18 ms"
+            case .fibre100m:
+                return "~100 Mbps (symmetric) / 12 ms"
+            case .threeG:
+                return "~780/330 Kbps / 120 ms"
+            case .fourG:
+                return "~4 Mbps / 60 ms"
+            case .custom:
+                return nil
+            }
+        }
+
+        var configuration: (latencyMs: Int, downstreamKbps: Int, upstreamKbps: Int)? {
+            switch self {
+            case .modem56:
+                return (latencyMs: 500, downstreamKbps: 7, upstreamKbps: 4)
+            case .isdn256:
+                return (latencyMs: 200, downstreamKbps: 32, upstreamKbps: 16)
+            case .isdn512:
+                return (latencyMs: 140, downstreamKbps: 64, upstreamKbps: 32)
+            case .adsl2m:
+                return (latencyMs: 90, downstreamKbps: 256, upstreamKbps: 32)
+            case .adsl2_8m:
+                return (latencyMs: 60, downstreamKbps: 1024, upstreamKbps: 128)
+            case .adsl2Plus16m:
+                return (latencyMs: 45, downstreamKbps: 2048, upstreamKbps: 128)
+            case .vdsl32m:
+                return (latencyMs: 35, downstreamKbps: 4096, upstreamKbps: 1024)
+            case .fibre32m:
+                return (latencyMs: 18, downstreamKbps: 4096, upstreamKbps: 4096)
+            case .fibre100m:
+                return (latencyMs: 12, downstreamKbps: 12800, upstreamKbps: 12800)
+            case .threeG:
+                return (latencyMs: 120, downstreamKbps: 97, upstreamKbps: 41)
+            case .fourG:
+                return (latencyMs: 60, downstreamKbps: 512, upstreamKbps: 256)
+            case .custom:
+                return nil
+            }
+        }
+
+        static func match(latencyMs: Int, downstreamKbps: Int, upstreamKbps: Int) -> Self {
+            for preset in Self.allCases {
+                guard let config = preset.configuration else { continue }
+                if config.latencyMs == latencyMs
+                    && config.downstreamKbps == downstreamKbps
+                    && config.upstreamKbps == upstreamKbps
+                {
+                    return preset
+                }
+            }
+            return .custom
+        }
+    }
+
+    private var selectedPreset: ThrottlePreset {
+        ThrottlePreset.match(
+            latencyMs: latencyMs,
+            downstreamKbps: downstreamKbps,
+            upstreamKbps: upstreamKbps
+        )
+    }
+
+    private var presetBinding: Binding<ThrottlePreset> {
+        Binding(
+            get: { selectedPreset },
+            set: { preset in
+                guard let config = preset.configuration else { return }
+                if !isEnabled {
+                    isEnabled = true
+                }
+                latencyMs = config.latencyMs
+                downstreamKbps = config.downstreamKbps
+                upstreamKbps = config.upstreamKbps
+            }
+        )
+    }
+
+    private var latencyBinding: Binding<String> {
+        Binding(
+            get: { "\(latencyMs)" },
+            set: { text in
+                latencyMs = Self.parseNonNegativeInt(text)
+            }
+        )
+    }
+
+    private var downstreamBinding: Binding<String> {
+        Binding(
+            get: { "\(downstreamKbps)" },
+            set: { text in
+                downstreamKbps = Self.parseNonNegativeInt(text)
+            }
+        )
+    }
+
+    private var upstreamBinding: Binding<String> {
+        Binding(
+            get: { "\(upstreamKbps)" },
+            set: { text in
+                upstreamKbps = Self.parseNonNegativeInt(text)
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Network Throttling")
+                        .font(.custom("Avenir Next Demi Bold", size: 20))
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                    Text("Simulate slow network. Restart is applied automatically while running.")
+                        .font(.custom("Avenir Next Medium", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                }
+
+                Spacer(minLength: 12)
+
+                Toggle("", isOn: $isEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Text("Preset")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                    Picker("", selection: presetBinding) {
+                        ForEach(ThrottlePreset.allCases, id: \.self) { preset in
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 170, alignment: .leading)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Latency")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                    TextField("0", text: latencyBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                    Text("ms")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                }
+                Spacer(minLength: 0)
+            }
+            .disabled(!isEnabled)
+
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Text("Downstream")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                    TextField("0", text: downstreamBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                    Text("KB/s")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                }
+
+                HStack(spacing: 8) {
+                    Text("Upstream")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                    TextField("0", text: upstreamBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                    Text("KB/s")
+                        .font(.custom("Avenir Next Demi Bold", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                }
+
+                Spacer(minLength: 0)
+            }
+            .disabled(!isEnabled)
+
+            Toggle("Only for selected hosts", isOn: $onlySelectedHosts)
+                .toggleStyle(.checkbox)
+                .font(.custom("Avenir Next Demi Bold", size: 12))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                .disabled(!isEnabled)
+
+            if onlySelectedHosts {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Locations")
+                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                    if selectedHosts.isEmpty {
+                        Text("No host pattern. Add e.g. *.example.com")
+                            .font(.custom("Avenir Next Medium", size: 11))
+                            .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                    } else {
+                        ForEach(selectedHosts, id: \.self) { host in
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.square.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(CrabTheme.primaryTint(for: colorScheme))
+                                Text(host)
+                                    .font(.custom("Menlo", size: 11))
+                                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 0)
+                                Button("Remove") {
+                                    selectedHosts.removeAll {
+                                        $0.caseInsensitiveCompare(host) == .orderedSame
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField("*.example.com", text: $newHostPattern)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Add") {
+                            addSelectedHost()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(newHostPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(CrabTheme.ruleCardFill(for: colorScheme))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                        )
+                )
+                .disabled(!isEnabled)
+            }
+
+            if let detail = selectedPreset.detail {
+                Text("Preset: \(detail)")
+                    .font(.custom("Avenir Next Medium", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+            }
+
+            Text("`0` latency = no delay, `0` downstream/upstream = unlimited speed.")
+                .font(.custom("Avenir Next Medium", size: 11))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                .opacity(isEnabled ? 1 : 0.75)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CrabTheme.themeCardFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
+    }
+
+    private static func parseNonNegativeInt(_ text: String) -> Int {
+        let digits = text.filter(\.isNumber)
+        guard !digits.isEmpty else { return 0 }
+        return Int(digits) ?? 0
+    }
+
+    private func addSelectedHost() {
+        let trimmed = newHostPattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if !selectedHosts.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            selectedHosts.append(trimmed)
+        }
+        newHostPattern = ""
     }
 }
 
@@ -539,6 +905,7 @@ struct RulesSettingsView: View {
             loadDraftsFromModel(force: !didInitializeDrafts)
             consumeStagedAllowRuleIfNeeded()
             consumeStagedMapLocalRuleIfNeeded()
+            consumeStagedStatusRewriteRuleIfNeeded()
         }
         .onChange(of: model.allowRules) { _, _ in
             loadDraftsFromModel(force: false)
@@ -814,6 +1181,23 @@ struct RulesSettingsView: View {
         if !alreadyExists {
             draftMapLocalRules.append(staged)
             mapLocalEditorState = MapLocalEditorState(editingRuleID: staged.id)
+        }
+    }
+
+    private func consumeStagedStatusRewriteRuleIfNeeded() {
+        guard let staged = model.consumeStagedStatusRewriteRule() else { return }
+        let matcher = staged.matcher.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !matcher.isEmpty else { return }
+
+        let alreadyExists = draftStatusRewriteRules.contains {
+            $0.matcher.trimmingCharacters(in: .whitespacesAndNewlines) == matcher
+                && $0.isEnabled == staged.isEnabled
+                && $0.fromStatusCode == staged.fromStatusCode
+                && $0.toStatusCode == staged.toStatusCode
+        }
+        if !alreadyExists {
+            draftStatusRewriteRules.append(staged)
+            statusRewriteEditorState = StatusRewriteEditorState(editingRuleID: staged.id)
         }
     }
 

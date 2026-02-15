@@ -73,6 +73,56 @@ final class ProxyViewModel: ObservableObject {
       applyInspectBodiesIfRunning(oldValue: oldValue)
     }
   }
+  @Published var throttleEnabled = false {
+    didSet {
+      applyThrottleIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published var throttleLatencyMs = 0 {
+    didSet {
+      let normalized = Self.normalizedNonNegativeInt(throttleLatencyMs)
+      if throttleLatencyMs != normalized {
+        throttleLatencyMs = normalized
+        return
+      }
+      applyThrottleLatencyIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published var throttleDownstreamKbps = 0 {
+    didSet {
+      let normalized = Self.normalizedNonNegativeInt(throttleDownstreamKbps)
+      if throttleDownstreamKbps != normalized {
+        throttleDownstreamKbps = normalized
+        return
+      }
+      applyThrottleDownstreamIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published var throttleUpstreamKbps = 0 {
+    didSet {
+      let normalized = Self.normalizedNonNegativeInt(throttleUpstreamKbps)
+      if throttleUpstreamKbps != normalized {
+        throttleUpstreamKbps = normalized
+        return
+      }
+      applyThrottleUpstreamIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published var throttleOnlySelectedHosts = false {
+    didSet {
+      applyThrottleOnlySelectedHostsIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published var throttleSelectedHosts: [String] = [] {
+    didSet {
+      let normalized = Self.normalizedThrottleHosts(throttleSelectedHosts)
+      if throttleSelectedHosts != normalized {
+        throttleSelectedHosts = normalized
+        return
+      }
+      applyThrottleSelectedHostsIfRunning(oldValue: oldValue)
+    }
+  }
   @Published var isRunning = false
   @Published var statusText = "Stopped"
   @Published var visibleURLFilter = "" {
@@ -97,6 +147,7 @@ final class ProxyViewModel: ObservableObject {
   @Published var selectedLogID: ProxyLogEntry.ID?
   @Published var stagedMapLocalRule: MapLocalRuleInput?
   @Published var stagedAllowRule: AllowRuleInput?
+  @Published var stagedStatusRewriteRule: StatusRewriteRuleInput?
   @Published var allowRules: [AllowRuleInput] = []
   @Published var mapLocalRules: [MapLocalRuleInput] = []
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
@@ -107,6 +158,14 @@ final class ProxyViewModel: ObservableObject {
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
   private static let mapLocalRulesDefaultsKey = "CrabProxyMacApp.mapLocalRules.v1"
   private static let statusRewriteRulesDefaultsKey = "CrabProxyMacApp.statusRewriteRules.v1"
+  private static let throttleEnabledDefaultsKey = "CrabProxyMacApp.throttle.enabled.v1"
+  private static let throttleLatencyMsDefaultsKey = "CrabProxyMacApp.throttle.latencyMs.v1"
+  private static let throttleDownstreamKbpsDefaultsKey = "CrabProxyMacApp.throttle.downstreamKbps.v1"
+  private static let throttleUpstreamKbpsDefaultsKey = "CrabProxyMacApp.throttle.upstreamKbps.v1"
+  private static let throttleOnlySelectedHostsDefaultsKey =
+    "CrabProxyMacApp.throttle.onlySelectedHosts.v1"
+  private static let throttleSelectedHostsDefaultsKey =
+    "CrabProxyMacApp.throttle.selectedHosts.v1"
   private let internalCACommonName = "Crab Proxy Internal Root CA"
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
@@ -117,6 +176,7 @@ final class ProxyViewModel: ObservableObject {
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var logFlushTask: Task<Void, Never>?
   private var inspectBodiesApplyTask: Task<Void, Never>?
+  private var throttleApplyTask: Task<Void, Never>?
   private var cancellables: Set<AnyCancellable> = []
 
   init(
@@ -130,6 +190,12 @@ final class ProxyViewModel: ObservableObject {
     allowRules = Self.loadAllowRules()
     mapLocalRules = Self.loadMapLocalRules()
     statusRewriteRules = Self.loadStatusRewriteRules()
+    throttleEnabled = Self.loadThrottleEnabled()
+    throttleLatencyMs = Self.loadThrottleLatencyMs()
+    throttleDownstreamKbps = Self.loadThrottleDownstreamKbps()
+    throttleUpstreamKbps = Self.loadThrottleUpstreamKbps()
+    throttleOnlySelectedHosts = Self.loadThrottleOnlySelectedHosts()
+    throttleSelectedHosts = Self.loadThrottleSelectedHosts()
     bindPersistence()
     refreshInternalCAStatus()
     refreshCACertKeychainStatus()
@@ -147,6 +213,7 @@ final class ProxyViewModel: ObservableObject {
   deinit {
     logFlushTask?.cancel()
     inspectBodiesApplyTask?.cancel()
+    throttleApplyTask?.cancel()
   }
 
   var selectedLog: ProxyLogEntry? {
@@ -214,6 +281,7 @@ final class ProxyViewModel: ObservableObject {
     do {
       try engine.setListenAddress(listenAddress)
       try engine.setInspectEnabled(inspectBodies)
+      try applyThrottleConfig(to: engine)
       if transparentProxyEnabled {
         try engine.setTransparentEnabled(true)
         try engine.setTransparentPort(transparentProxyPort)
@@ -609,6 +677,30 @@ final class ProxyViewModel: ObservableObject {
     return rule
   }
 
+  func stageStatusRewriteRule(from entry: ProxyLogEntry) {
+    let matcher = defaultMapLocalMatcher(from: entry.url)
+    let fromStatusCode: String
+    if let raw = entry.statusCode, let code = UInt16(raw), (100...599).contains(code) {
+      fromStatusCode = String(code)
+    } else {
+      fromStatusCode = ""
+    }
+
+    stagedStatusRewriteRule = StatusRewriteRuleInput(
+      isEnabled: true,
+      matcher: matcher,
+      fromStatusCode: fromStatusCode,
+      toStatusCode: "200"
+    )
+    statusText = "Status Rewrite draft added. Review and save changes."
+  }
+
+  func consumeStagedStatusRewriteRule() -> StatusRewriteRuleInput? {
+    let rule = stagedStatusRewriteRule
+    stagedStatusRewriteRule = nil
+    return rule
+  }
+
   func addAllowRule() {
     allowRules.append(AllowRuleInput())
   }
@@ -638,6 +730,18 @@ final class ProxyViewModel: ObservableObject {
       allowRules: allowRules,
       mapLocalRules: mapLocalRules
     )
+
+    do {
+      try ruleManager.validateRules(
+        allowRules: mergedAllowRules,
+        mapLocalRules: mapLocalRules,
+        statusRewriteRules: statusRewriteRules
+      )
+    } catch {
+      statusText = "Save failed: \(error.localizedDescription)"
+      return
+    }
+
     self.allowRules = mergedAllowRules
     self.mapLocalRules = mapLocalRules
     self.statusRewriteRules = statusRewriteRules
@@ -674,6 +778,7 @@ final class ProxyViewModel: ObservableObject {
     if runtimeWasRunning {
       try activeEngine.setListenAddress(listenAddress)
       try activeEngine.setInspectEnabled(inspectBodies)
+      try applyThrottleConfig(to: activeEngine)
       if transparentProxyEnabled {
         try activeEngine.setTransparentEnabled(true)
         try activeEngine.setTransparentPort(transparentProxyPort)
@@ -714,6 +819,29 @@ final class ProxyViewModel: ObservableObject {
       mapLocalRules: mapLocalRules,
       statusRewriteRules: statusRewriteRules
     )
+  }
+
+  private func applyThrottleConfig(to engine: RustProxyEngine) throws {
+    let enabled = throttleEnabled
+    let latencyMs = UInt64(Self.normalizedNonNegativeInt(throttleLatencyMs))
+    let downstreamKbps = UInt64(Self.normalizedNonNegativeInt(throttleDownstreamKbps))
+    let upstreamKbps = UInt64(Self.normalizedNonNegativeInt(throttleUpstreamKbps))
+    let downstreamMultiply = downstreamKbps.multipliedReportingOverflow(by: 1024)
+    let upstreamMultiply = upstreamKbps.multipliedReportingOverflow(by: 1024)
+    let downstreamBytesPerSecond = downstreamMultiply.overflow
+      ? UInt64.max
+      : downstreamMultiply.partialValue
+    let upstreamBytesPerSecond = upstreamMultiply.overflow ? UInt64.max : upstreamMultiply.partialValue
+
+    try engine.setThrottleEnabled(enabled)
+    try engine.setThrottleLatencyMs(latencyMs)
+    try engine.setThrottleDownstreamBytesPerSecond(downstreamBytesPerSecond)
+    try engine.setThrottleUpstreamBytesPerSecond(upstreamBytesPerSecond)
+    try engine.setThrottleOnlySelectedHosts(throttleOnlySelectedHosts)
+    try engine.clearThrottleSelectedHosts()
+    for matcher in throttleSelectedHosts {
+      try engine.addThrottleSelectedHost(matcher)
+    }
   }
 
   private func ensureInternalCALoaded(engine: RustProxyEngine) throws {
@@ -866,6 +994,60 @@ final class ProxyViewModel: ObservableObject {
     }
   }
 
+  private func applyThrottleIfRunning(oldValue: Bool) {
+    guard oldValue != throttleEnabled else { return }
+    guard isRunning else { return }
+    scheduleThrottleApplyIfRunning()
+  }
+
+  private func applyThrottleLatencyIfRunning(oldValue: Int) {
+    guard oldValue != throttleLatencyMs else { return }
+    guard isRunning else { return }
+    scheduleThrottleApplyIfRunning()
+  }
+
+  private func applyThrottleDownstreamIfRunning(oldValue: Int) {
+    guard oldValue != throttleDownstreamKbps else { return }
+    guard isRunning else { return }
+    scheduleThrottleApplyIfRunning()
+  }
+
+  private func applyThrottleUpstreamIfRunning(oldValue: Int) {
+    guard oldValue != throttleUpstreamKbps else { return }
+    guard isRunning else { return }
+    scheduleThrottleApplyIfRunning()
+  }
+
+  private func applyThrottleOnlySelectedHostsIfRunning(oldValue: Bool) {
+    guard oldValue != throttleOnlySelectedHosts else { return }
+    guard isRunning else { return }
+    scheduleThrottleApplyIfRunning()
+  }
+
+  private func applyThrottleSelectedHostsIfRunning(oldValue: [String]) {
+    guard oldValue != throttleSelectedHosts else { return }
+    guard isRunning else { return }
+    scheduleThrottleApplyIfRunning()
+  }
+
+  private func scheduleThrottleApplyIfRunning() {
+    guard isRunning else { return }
+    throttleApplyTask?.cancel()
+
+    throttleApplyTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self else { return }
+      guard !Task.isCancelled else { return }
+      guard self.isRunning else { return }
+
+      self.stopProxy()
+      guard !Task.isCancelled else { return }
+      guard !self.isRunning else { return }
+
+      self.startProxy()
+    }
+  }
+
   private func scheduleLogFlushIfNeeded() {
     guard logFlushTask == nil else { return }
 
@@ -946,6 +1128,48 @@ final class ProxyViewModel: ObservableObject {
       .dropFirst()
       .sink { [weak self] _ in
         self?.persistStatusRewriteRules()
+      }
+      .store(in: &cancellables)
+
+    $throttleEnabled
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistThrottleSettings()
+      }
+      .store(in: &cancellables)
+
+    $throttleLatencyMs
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistThrottleSettings()
+      }
+      .store(in: &cancellables)
+
+    $throttleDownstreamKbps
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistThrottleSettings()
+      }
+      .store(in: &cancellables)
+
+    $throttleUpstreamKbps
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistThrottleSettings()
+      }
+      .store(in: &cancellables)
+
+    $throttleOnlySelectedHosts
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistThrottleSettings()
+      }
+      .store(in: &cancellables)
+
+    $throttleSelectedHosts
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistThrottleSettings()
       }
       .store(in: &cancellables)
   }
@@ -1089,6 +1313,31 @@ final class ProxyViewModel: ObservableObject {
     UserDefaults.standard.set(data, forKey: Self.statusRewriteRulesDefaultsKey)
   }
 
+  private func persistThrottleSettings() {
+    let defaults = UserDefaults.standard
+    defaults.set(throttleEnabled, forKey: Self.throttleEnabledDefaultsKey)
+    defaults.set(
+      Self.normalizedNonNegativeInt(throttleLatencyMs),
+      forKey: Self.throttleLatencyMsDefaultsKey
+    )
+    defaults.set(
+      Self.normalizedNonNegativeInt(throttleDownstreamKbps),
+      forKey: Self.throttleDownstreamKbpsDefaultsKey
+    )
+    defaults.set(
+      Self.normalizedNonNegativeInt(throttleUpstreamKbps),
+      forKey: Self.throttleUpstreamKbpsDefaultsKey
+    )
+    defaults.set(
+      throttleOnlySelectedHosts,
+      forKey: Self.throttleOnlySelectedHostsDefaultsKey
+    )
+    defaults.set(
+      Self.normalizedThrottleHosts(throttleSelectedHosts),
+      forKey: Self.throttleSelectedHostsDefaultsKey
+    )
+  }
+
   private static func loadAllowRules() -> [AllowRuleInput] {
     let defaults = UserDefaults.standard
     let key = Self.allowRulesDefaultsKey
@@ -1145,5 +1394,62 @@ final class ProxyViewModel: ObservableObject {
         toStatusCode: item.toStatusCode
       )
     }
+  }
+
+  private static func loadThrottleEnabled() -> Bool {
+    let defaults = UserDefaults.standard
+    guard defaults.object(forKey: Self.throttleEnabledDefaultsKey) != nil else {
+      return false
+    }
+    return defaults.bool(forKey: Self.throttleEnabledDefaultsKey)
+  }
+
+  private static func loadThrottleLatencyMs() -> Int {
+    let defaults = UserDefaults.standard
+    let raw = defaults.integer(forKey: Self.throttleLatencyMsDefaultsKey)
+    return normalizedNonNegativeInt(raw)
+  }
+
+  private static func loadThrottleDownstreamKbps() -> Int {
+    let defaults = UserDefaults.standard
+    let raw = defaults.integer(forKey: Self.throttleDownstreamKbpsDefaultsKey)
+    return normalizedNonNegativeInt(raw)
+  }
+
+  private static func loadThrottleUpstreamKbps() -> Int {
+    let defaults = UserDefaults.standard
+    let raw = defaults.integer(forKey: Self.throttleUpstreamKbpsDefaultsKey)
+    return normalizedNonNegativeInt(raw)
+  }
+
+  private static func loadThrottleOnlySelectedHosts() -> Bool {
+    let defaults = UserDefaults.standard
+    guard defaults.object(forKey: Self.throttleOnlySelectedHostsDefaultsKey) != nil else {
+      return false
+    }
+    return defaults.bool(forKey: Self.throttleOnlySelectedHostsDefaultsKey)
+  }
+
+  private static func loadThrottleSelectedHosts() -> [String] {
+    let defaults = UserDefaults.standard
+    let raw = defaults.stringArray(forKey: Self.throttleSelectedHostsDefaultsKey) ?? []
+    return normalizedThrottleHosts(raw)
+  }
+
+  private static func normalizedThrottleHosts(_ values: [String]) -> [String] {
+    var out: [String] = []
+    var seen: Set<String> = []
+    for raw in values {
+      let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { continue }
+      let lowered = trimmed.lowercased()
+      guard seen.insert(lowered).inserted else { continue }
+      out.append(trimmed)
+    }
+    return out
+  }
+
+  private static func normalizedNonNegativeInt(_ value: Int) -> Int {
+    max(0, value)
   }
 }

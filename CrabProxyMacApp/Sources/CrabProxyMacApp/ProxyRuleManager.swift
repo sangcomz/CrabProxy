@@ -12,18 +12,76 @@ enum ProxyRuleSyncError: Error, LocalizedError {
 }
 
 struct ProxyRuleManager {
+    private struct ValidatedRules {
+        let allowMatchers: [String]
+        let mapLocalRules: [MapLocalRuleConfig]
+        let statusRewriteRules: [StatusRewriteRuleConfig]
+    }
+
+    func validateRules(
+        allowRules: [AllowRuleInput],
+        mapLocalRules: [MapLocalRuleInput],
+        statusRewriteRules: [StatusRewriteRuleInput]
+    ) throws {
+        _ = try buildValidatedRules(
+            allowRules: allowRules,
+            mapLocalRules: mapLocalRules,
+            statusRewriteRules: statusRewriteRules
+        )
+    }
+
     func syncRules(
         to engine: RustProxyEngine,
         allowRules: [AllowRuleInput],
         mapLocalRules: [MapLocalRuleInput],
         statusRewriteRules: [StatusRewriteRuleInput]
     ) throws {
+        let validated = try buildValidatedRules(
+            allowRules: allowRules,
+            mapLocalRules: mapLocalRules,
+            statusRewriteRules: statusRewriteRules
+        )
+
         try engine.clearRules()
 
-        for matcher in normalizedAllowMatchers(from: allowRules) {
+        for matcher in validated.allowMatchers {
             try engine.addAllowRule(matcher)
         }
 
+        for rule in validated.mapLocalRules {
+            try engine.addMapLocalRule(rule)
+        }
+
+        for rule in validated.statusRewriteRules {
+            try engine.addStatusRewriteRule(rule)
+        }
+    }
+
+    func normalizedAllowMatchers(from allowRules: [AllowRuleInput]) -> [String] {
+        var seen: Set<String> = []
+        var values: [String] = []
+
+        for draft in allowRules {
+            let matcher = trimmed(draft.matcher)
+            if matcher.isEmpty {
+                continue
+            }
+            let key = matcher.lowercased()
+            if seen.insert(key).inserted {
+                values.append(matcher)
+            }
+        }
+        return values
+    }
+
+    private func buildValidatedRules(
+        allowRules: [AllowRuleInput],
+        mapLocalRules: [MapLocalRuleInput],
+        statusRewriteRules: [StatusRewriteRuleInput]
+    ) throws -> ValidatedRules {
+        let normalizedAllowRules = normalizedAllowMatchers(from: allowRules)
+
+        var normalizedMapLocalRules: [MapLocalRuleConfig] = []
         for (index, draft) in mapLocalRules.enumerated() {
             if !draft.isEnabled {
                 continue
@@ -60,7 +118,7 @@ struct ProxyRuleManager {
                 source = .text(value: sourceValue)
             }
 
-            try engine.addMapLocalRule(
+            normalizedMapLocalRules.append(
                 MapLocalRuleConfig(
                     matcher: matcher,
                     source: source,
@@ -70,6 +128,7 @@ struct ProxyRuleManager {
             )
         }
 
+        var normalizedStatusRewriteRules: [StatusRewriteRuleConfig] = []
         for (index, draft) in statusRewriteRules.enumerated() {
             if !draft.isEnabled {
                 continue
@@ -95,7 +154,7 @@ struct ProxyRuleManager {
                 )
             }
 
-            try engine.addStatusRewriteRule(
+            normalizedStatusRewriteRules.append(
                 StatusRewriteRuleConfig(
                     matcher: matcher,
                     fromStatusCode: fromStatus,
@@ -103,23 +162,12 @@ struct ProxyRuleManager {
                 )
             )
         }
-    }
 
-    func normalizedAllowMatchers(from allowRules: [AllowRuleInput]) -> [String] {
-        var seen: Set<String> = []
-        var values: [String] = []
-
-        for draft in allowRules {
-            let matcher = trimmed(draft.matcher)
-            if matcher.isEmpty {
-                continue
-            }
-            let key = matcher.lowercased()
-            if seen.insert(key).inserted {
-                values.append(matcher)
-            }
-        }
-        return values
+        return ValidatedRules(
+            allowMatchers: normalizedAllowRules,
+            mapLocalRules: normalizedMapLocalRules,
+            statusRewriteRules: normalizedStatusRewriteRules
+        )
     }
 
     private func parseStatusCode(

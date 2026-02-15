@@ -50,6 +50,9 @@ private final class RustLogCallbackContext {
 }
 
 final class RustProxyEngine {
+    nonisolated(unsafe) private static let logCallbackLock = NSLock()
+    nonisolated(unsafe) private static var currentLogCallbackUserData: UnsafeMutableRawPointer?
+
     private var handle: OpaquePointer?
     private var callbackContext: RustLogCallbackContext?
     private var callbackUserData: UnsafeMutableRawPointer?
@@ -70,10 +73,22 @@ final class RustProxyEngine {
         let userData = Unmanaged.passRetained(callbackContext).toOpaque()
         callbackUserData = userData
         crab_set_log_callback(rustLogCallbackBridge, userData)
+
+        Self.logCallbackLock.lock()
+        Self.currentLogCallbackUserData = userData
+        Self.logCallbackLock.unlock()
     }
 
     deinit {
-        crab_set_log_callback(nil, nil)
+        Self.logCallbackLock.lock()
+        let shouldClearCallback =
+            callbackUserData != nil && callbackUserData == Self.currentLogCallbackUserData
+        if shouldClearCallback {
+            crab_set_log_callback(nil, nil)
+            Self.currentLogCallbackUserData = nil
+        }
+        Self.logCallbackLock.unlock()
+
         callbackContext?.engine = nil
         if let userData = callbackUserData {
             Unmanaged<RustLogCallbackContext>.fromOpaque(userData).release()
@@ -128,6 +143,54 @@ final class RustProxyEngine {
     func setInspectEnabled(_ enabled: Bool) throws {
         let h = try requireHandle()
         let result = crab_proxy_set_inspect_enabled(h, enabled)
+        try Self.check(result)
+    }
+
+    func setThrottleEnabled(_ enabled: Bool) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_throttle_enabled(h, enabled)
+        try Self.check(result)
+    }
+
+    func setThrottleLatencyMs(_ latencyMs: UInt64) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_throttle_latency_ms(h, latencyMs)
+        try Self.check(result)
+    }
+
+    func setThrottleDownstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_throttle_downstream_bps(h, bytesPerSecond)
+        try Self.check(result)
+    }
+
+    func setThrottleUpstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_throttle_upstream_bps(h, bytesPerSecond)
+        try Self.check(result)
+    }
+
+    func setThrottleOnlySelectedHosts(_ enabled: Bool) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_throttle_only_selected_hosts(h, enabled)
+        try Self.check(result)
+    }
+
+    func clearThrottleSelectedHosts() throws {
+        let h = try requireHandle()
+        let result = crab_proxy_throttle_hosts_clear(h)
+        try Self.check(result)
+    }
+
+    func addThrottleSelectedHost(_ matcher: String) throws {
+        let h = try requireHandle()
+        let normalized = matcher.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw RustProxyError.internalState("throttle host matcher must not be empty")
+        }
+        let result = normalized.withCString {
+            crab_proxy_throttle_hosts_add(h, $0)
+        }
         try Self.check(result)
     }
 
