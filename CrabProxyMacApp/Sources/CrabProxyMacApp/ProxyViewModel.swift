@@ -1,4 +1,5 @@
 import Combine
+import CFNetwork
 import Foundation
 
 private enum ProxyViewModelError: Error, LocalizedError {
@@ -46,6 +47,20 @@ final class ProxyViewModel: ObservableObject {
     let hasMobile: Bool
 
     var id: String { domain }
+  }
+
+  private struct ReplayHeader: Sendable {
+    let name: String
+    let value: String
+  }
+
+  private struct ReplayRequestDraft: Sendable {
+    let method: String
+    let url: URL
+    let headers: [ReplayHeader]
+    let bodyData: Data?
+    let redactedHeaderCount: Int
+    let omittedBinaryBody: Bool
   }
 
   private struct PersistedMapLocalRule: Codable {
@@ -170,6 +185,18 @@ final class ProxyViewModel: ObservableObject {
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
   private let transparentProxyPort: UInt16 = 8889
+  private static let replayExcludedHeaders: Set<String> = [
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-connection",
+    "transfer-encoding",
+    "upgrade"
+  ]
+  private static let replayMethodTokenCharacters = CharacterSet(
+    charactersIn: "!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  )
   private let caCertService: any CACertServicing
   private let pfService: any PFServicing
   private let systemProxyService: any MacSystemProxyServicing
@@ -334,6 +361,19 @@ final class ProxyViewModel: ObservableObject {
     logs = logStore.clear()
     filteredLogs.removeAll(keepingCapacity: true)
     selectedLogID = nil
+  }
+
+  func replay(entryID: ProxyLogEntry.ID) {
+    guard let entry = logStore.selectedLog(id: entryID) ?? logs.first(where: { $0.id == entryID }) else {
+      statusText = "Replay failed: selected request no longer exists."
+      return
+    }
+    guard let draft = replayDraft(from: entry) else { return }
+
+    statusText = "Replay started: \(draft.method) \(replayTargetLabel(for: draft.url))"
+    Task { [weak self] in
+      await self?.performReplay(draft)
+    }
   }
 
   var macSystemProxyTarget: String {
@@ -888,6 +928,230 @@ final class ProxyViewModel: ObservableObject {
     } else {
       caStatusText = "Internal CA will be generated on Start"
     }
+  }
+
+  private func replayDraft(from entry: ProxyLogEntry) -> ReplayRequestDraft? {
+    guard let method = normalizedReplayMethod(from: entry.method) else {
+      statusText = "Replay failed: unsupported method (\(entry.method))."
+      return nil
+    }
+    guard
+      let url = URL(string: entry.url),
+      let scheme = url.scheme?.lowercased(),
+      scheme == "http" || scheme == "https"
+    else {
+      statusText = "Replay failed: invalid URL."
+      return nil
+    }
+
+    let headers = replayHeaders(from: entry.requestHeaders)
+    let body = replayBody(from: entry.requestBodyPreview)
+    return ReplayRequestDraft(
+      method: method,
+      url: url,
+      headers: headers.headers,
+      bodyData: body.data,
+      redactedHeaderCount: headers.redactedCount,
+      omittedBinaryBody: body.omittedBinaryBody
+    )
+  }
+
+  private func normalizedReplayMethod(from raw: String) -> String? {
+    let method = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    guard !method.isEmpty, method != "CONNECT" else { return nil }
+    guard
+      method.unicodeScalars.allSatisfy({
+        Self.replayMethodTokenCharacters.contains($0)
+      })
+    else {
+      return nil
+    }
+    return method
+  }
+
+  private func replayHeaders(from raw: String?) -> (headers: [ReplayHeader], redactedCount: Int) {
+    guard let raw else { return ([], 0) }
+    var headers: [ReplayHeader] = []
+    var redactedCount = 0
+
+    for rawLine in raw.split(whereSeparator: \.isNewline) {
+      let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !line.isEmpty, let separator = line.firstIndex(of: ":") else { continue }
+      let name = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !name.isEmpty else { continue }
+
+      let valueStart = line.index(after: separator)
+      let value = line[valueStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+      if Self.replayExcludedHeaders.contains(name.lowercased()) {
+        continue
+      }
+      if value.caseInsensitiveCompare("<redacted>") == .orderedSame {
+        redactedCount += 1
+        continue
+      }
+
+      headers.append(ReplayHeader(name: String(name), value: String(value)))
+    }
+
+    return (headers, redactedCount)
+  }
+
+  private func replayBody(from raw: String?) -> (data: Data?, omittedBinaryBody: Bool) {
+    guard let raw, !raw.isEmpty else { return (nil, false) }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return (nil, false) }
+    if trimmed.lowercased().hasPrefix("<binary ") {
+      return (nil, true)
+    }
+    return (raw.data(using: .utf8), false)
+  }
+
+  private func performReplay(_ draft: ReplayRequestDraft) async {
+    let noteSuffix = replayNoteSuffix(for: draft)
+
+    if let localProxy = replayLocalProxyEndpoint(for: draft.url) {
+      do {
+        let response = try await sendReplay(
+          draft,
+          proxyHost: localProxy.host,
+          proxyPort: localProxy.port
+        )
+        statusText =
+          "Replay sent via local proxy (\(response.statusCode))\(noteSuffix)"
+        return
+      } catch {
+        let proxyError = error
+        do {
+          let response = try await sendReplay(draft, proxyHost: nil, proxyPort: nil)
+          statusText =
+            "Replay sent directly (\(response.statusCode), proxy fallback)\(noteSuffix)"
+          return
+        } catch {
+          statusText =
+            "Replay failed: \(error.localizedDescription) (proxy: \(proxyError.localizedDescription))"
+          return
+        }
+      }
+    }
+
+    do {
+      let response = try await sendReplay(draft, proxyHost: nil, proxyPort: nil)
+      statusText = "Replay sent directly (\(response.statusCode))\(noteSuffix)"
+    } catch {
+      statusText = "Replay failed: \(error.localizedDescription)"
+    }
+  }
+
+  private func replayLocalProxyEndpoint(for url: URL) -> (host: String, port: Int)? {
+    guard isRunning else { return nil }
+    let listen = parsedListen
+    let normalizedHost = normalizedReplayProxyHost(from: listen.host)
+    let port = Int(listen.port)
+    guard !normalizedHost.isEmpty else { return nil }
+
+    // Avoid routing replay of proxy's own endpoint back into itself.
+    if
+      let targetHost = url.host,
+      isLoopbackHost(targetHost.lowercased()),
+      (url.port ?? defaultPort(for: url)) == port
+    {
+      return nil
+    }
+    if
+      let targetHost = url.host,
+      targetHost.caseInsensitiveCompare(normalizedHost) == .orderedSame,
+      (url.port ?? defaultPort(for: url)) == port
+    {
+      return nil
+    }
+
+    return (host: normalizedHost, port: port)
+  }
+
+  private func normalizedReplayProxyHost(from host: String) -> String {
+    let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    if isAllInterfacesHost(trimmedHost) || isLoopbackHost(trimmedHost) {
+      return "127.0.0.1"
+    }
+    if trimmedHost.hasPrefix("["),
+      trimmedHost.hasSuffix("]"),
+      trimmedHost.count > 2
+    {
+      return String(trimmedHost.dropFirst().dropLast())
+    }
+    return trimmedHost
+  }
+
+  private func defaultPort(for url: URL) -> Int {
+    let scheme = url.scheme?.lowercased() ?? ""
+    return scheme == "https" ? 443 : 80
+  }
+
+  private func sendReplay(
+    _ draft: ReplayRequestDraft,
+    proxyHost: String?,
+    proxyPort: Int?
+  ) async throws -> HTTPURLResponse {
+    var request = URLRequest(url: draft.url)
+    request.httpMethod = draft.method
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.timeoutInterval = 60
+    request.httpBody = draft.bodyData
+
+    for header in draft.headers {
+      request.addValue(header.value, forHTTPHeaderField: header.name)
+    }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.timeoutIntervalForRequest = 60
+    configuration.timeoutIntervalForResource = 90
+
+    if let proxyHost, let proxyPort {
+      configuration.connectionProxyDictionary = [
+        kCFNetworkProxiesHTTPEnable as String: true,
+        kCFNetworkProxiesHTTPProxy as String: proxyHost,
+        kCFNetworkProxiesHTTPPort as String: proxyPort,
+        kCFNetworkProxiesHTTPSEnable as String: true,
+        kCFNetworkProxiesHTTPSProxy as String: proxyHost,
+        kCFNetworkProxiesHTTPSPort as String: proxyPort
+      ]
+    } else {
+      configuration.connectionProxyDictionary = [
+        kCFNetworkProxiesHTTPEnable as String: false,
+        kCFNetworkProxiesHTTPSEnable as String: false
+      ]
+    }
+
+    let session = URLSession(configuration: configuration)
+    defer { session.finishTasksAndInvalidate() }
+    let (_, response) = try await session.data(for: request)
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw ProxyViewModelError.invalidValue("Replay received non-HTTP response")
+    }
+    return httpResponse
+  }
+
+  private func replayNoteSuffix(for draft: ReplayRequestDraft) -> String {
+    var notes: [String] = []
+    if draft.redactedHeaderCount > 0 {
+      notes.append("\(draft.redactedHeaderCount) redacted header(s) skipped")
+    }
+    if draft.omittedBinaryBody {
+      notes.append("binary body skipped")
+    }
+    guard !notes.isEmpty else { return "" }
+    return " (\(notes.joined(separator: ", ")))"
+  }
+
+  private func replayTargetLabel(for url: URL) -> String {
+    let host = url.host ?? url.absoluteString
+    let path = url.path.isEmpty ? "/" : url.path
+    let target = "\(host)\(path)"
+    if target.count > 80 {
+      return String(target.prefix(77)) + "..."
+    }
+    return target
   }
 
   private func internalCAURLsIfAvailable() -> (cert: URL, key: URL)? {

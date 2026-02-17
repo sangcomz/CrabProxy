@@ -446,6 +446,10 @@ struct ContentView: View {
                             TransactionRow(entry: entry)
                                 .tag(entry.id)
                                 .contextMenu {
+                                    Button("Replay") {
+                                        model.replay(entryID: entry.id)
+                                    }
+                                    Divider()
                                     Button("Add to Allowlist") {
                                         model.stageAllowRule(from: entry)
                                         settingsTabRawValue = "Rules"
