@@ -1,382 +1,715 @@
 #if canImport(CCrabMitm)
 import CCrabMitm
 #endif
+import Darwin
 import Foundation
 
 enum RustProxyError: Error, LocalizedError {
-    case ffi(code: Int32, message: String)
-    case internalState(String)
+  case ffi(code: Int32, message: String)
+  case internalState(String)
 
-    var errorDescription: String? {
-        switch self {
-        case let .ffi(code, message):
-            return "Rust FFI error(\(code)): \(message)"
-        case let .internalState(message):
-            return message
-        }
+  var errorDescription: String? {
+    switch self {
+    case let .ffi(code, message):
+      return "Rust FFI error(\(code)): \(message)"
+    case let .internalState(message):
+      return message
     }
+  }
 }
 
 enum MapLocalSource {
-    case file(path: String)
-    case text(value: String)
+  case file(path: String)
+  case text(value: String)
 }
 
 struct MapLocalRuleConfig {
-    var matcher: String
-    var source: MapLocalSource
-    var statusCode: UInt16
-    var contentType: String?
+  var matcher: String
+  var source: MapLocalSource
+  var statusCode: UInt16
+  var contentType: String?
 }
 
 struct MapRemoteRuleConfig {
-    var matcher: String
-    var destinationURL: String
+  var matcher: String
+  var destinationURL: String
 }
 
 struct StatusRewriteRuleConfig {
-    var matcher: String
-    var fromStatusCode: Int?
-    var toStatusCode: UInt16
+  var matcher: String
+  var fromStatusCode: Int?
+  var toStatusCode: UInt16
 }
 
 enum CAKeyAlgorithm: UInt32 {
-    case ecdsaP256 = 0
-    case rsa2048 = 1
-    case rsa4096 = 2
+  case ecdsaP256 = 0
+  case rsa2048 = 1
+  case rsa4096 = 2
 }
 
-private final class RustLogCallbackContext {
-    weak var engine: RustProxyEngine?
-
-    init(engine: RustProxyEngine) {
-        self.engine = engine
+final class RustProxyEngine: @unchecked Sendable {
+  var onLog: (@Sendable (UInt8, String) -> Void)? {
+    didSet {
+      if onLog == nil {
+        stopLogStreaming()
+      } else {
+        startLogStreamingIfNeeded()
+      }
     }
-}
+  }
 
-final class RustProxyEngine {
-    nonisolated(unsafe) private static let logCallbackLock = NSLock()
-    nonisolated(unsafe) private static var currentLogCallbackUserData: UnsafeMutableRawPointer?
+  private var listenAddress: String
+  private var inspectEnabled = true
+  private var throttleEnabled = false
+  private var throttleLatencyMs: UInt64 = 0
+  private var throttleDownstreamBytesPerSecond: UInt64 = 0
+  private var throttleUpstreamBytesPerSecond: UInt64 = 0
+  private var throttleOnlySelectedHosts = false
+  private var throttleSelectedHosts: [String] = []
+  private var allowlistEnabled = false
+  private var allowlistIPs: [String] = []
+  private var transparentEnabled = false
+  private var transparentPort: UInt16 = 8889
 
-    private var handle: OpaquePointer?
-    private var callbackContext: RustLogCallbackContext?
-    private var callbackUserData: UnsafeMutableRawPointer?
-    var onLog: (@Sendable (UInt8, String) -> Void)?
+  private let crabdPath: String
+  private let socketPath: String
+  private let tokenPath: String
+  private let principal = "app"
 
-    init(listenAddress: String) throws {
-        var raw: OpaquePointer?
-        let result = listenAddress.withCString { crab_proxy_create(&raw, $0) }
-        try Self.check(result)
+  private let logQueue = DispatchQueue(label: "CrabProxyMacApp.RustProxyEngine.log")
+  private var logStreamingActive = false
+  private var logTailCursor: UInt64 = 0
 
-        guard let raw else {
-            throw RustProxyError.internalState("failed to create proxy handle")
+  init(listenAddress: String) throws {
+    self.listenAddress = listenAddress
+
+    crabdPath = try Self.resolveBinaries()
+
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let runDir = home
+      .appendingPathComponent("Library")
+      .appendingPathComponent("Application Support")
+      .appendingPathComponent("CrabProxy")
+      .appendingPathComponent("run")
+
+    socketPath = runDir.appendingPathComponent("crabd.sock").path
+    tokenPath = runDir.appendingPathComponent("app.token").path
+  }
+
+  deinit {
+    stopLogStreaming()
+  }
+
+  func setListenAddress(_ value: String) throws {
+    listenAddress = value
+    _ = try invokeRPC(
+      method: "engine.set_listen_addr",
+      params: ["listen_addr": value]
+    )
+  }
+
+  func setPort(_ value: UInt16) throws {
+    let host: String
+    if let index = listenAddress.lastIndex(of: ":") {
+      host = String(listenAddress[..<index])
+    } else {
+      host = "127.0.0.1"
+    }
+    try setListenAddress("\(host):\(value)")
+  }
+
+  func loadCA(certPath: String, keyPath: String) throws {
+    _ = try invokeRPC(
+      method: "engine.load_ca",
+      params: [
+        "cert_path": certPath,
+        "key_path": keyPath,
+      ]
+    )
+  }
+
+  static func generateCA(
+    commonName: String,
+    days: UInt32,
+    certPath: String,
+    keyPath: String,
+    algorithm: CAKeyAlgorithm = .ecdsaP256
+  ) throws {
+#if canImport(CCrabMitm)
+    let result = commonName.withCString { cn in
+      certPath.withCString { cert in
+        keyPath.withCString { key in
+          crab_ca_generate_with_algorithm(cn, days, cert, key, algorithm.rawValue)
         }
-        handle = raw
+      }
+    }
+    try check(result)
+#else
+    throw RustProxyError.internalState("CCrabMitm is unavailable for CA generation")
+#endif
+  }
 
-        let callbackContext = RustLogCallbackContext(engine: self)
-        self.callbackContext = callbackContext
-        let userData = Unmanaged.passRetained(callbackContext).toOpaque()
-        callbackUserData = userData
-        crab_set_log_callback(rustLogCallbackBridge, userData)
+  func setInspectEnabled(_ enabled: Bool) throws {
+    inspectEnabled = enabled
+    _ = try invokeRPC(
+      method: "engine.set_inspect_enabled",
+      params: ["enabled": enabled]
+    )
+  }
 
-        Self.logCallbackLock.lock()
-        Self.currentLogCallbackUserData = userData
-        Self.logCallbackLock.unlock()
+  func setThrottleEnabled(_ enabled: Bool) throws {
+    throttleEnabled = enabled
+    try pushThrottle()
+  }
+
+  func setThrottleLatencyMs(_ latencyMs: UInt64) throws {
+    throttleLatencyMs = latencyMs
+    try pushThrottle()
+  }
+
+  func setThrottleDownstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws {
+    throttleDownstreamBytesPerSecond = bytesPerSecond
+    try pushThrottle()
+  }
+
+  func setThrottleUpstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws {
+    throttleUpstreamBytesPerSecond = bytesPerSecond
+    try pushThrottle()
+  }
+
+  func setThrottleOnlySelectedHosts(_ enabled: Bool) throws {
+    throttleOnlySelectedHosts = enabled
+    try pushThrottle()
+  }
+
+  func clearThrottleSelectedHosts() throws {
+    throttleSelectedHosts.removeAll(keepingCapacity: false)
+    try pushThrottle()
+  }
+
+  func addThrottleSelectedHost(_ matcher: String) throws {
+    throttleSelectedHosts.append(matcher)
+    try pushThrottle()
+  }
+
+  func setClientAllowlistEnabled(_ enabled: Bool) throws {
+    allowlistEnabled = enabled
+    try pushClientAllowlist()
+  }
+
+  func clearClientAllowlist() throws {
+    allowlistIPs.removeAll(keepingCapacity: false)
+    try pushClientAllowlist()
+  }
+
+  func addClientAllowlistIP(_ ipAddress: String) throws {
+    allowlistIPs.append(ipAddress)
+    try pushClientAllowlist()
+  }
+
+  func setTransparentEnabled(_ enabled: Bool) throws {
+    transparentEnabled = enabled
+    try pushTransparent()
+  }
+
+  func setTransparentPort(_ port: UInt16) throws {
+    transparentPort = port
+    try pushTransparent()
+  }
+
+  func clearRules() throws {
+    _ = try invokeRPC(method: "engine.rules_clear", params: [:])
+  }
+
+  func addAllowRule(_ matcher: String) throws {
+    _ = try invokeRPC(
+      method: "engine.rules_add_allow",
+      params: ["matcher": matcher]
+    )
+  }
+
+  func addMapLocalRule(_ rule: MapLocalRuleConfig) throws {
+    switch rule.source {
+    case let .file(path):
+      var params: [String: Any] = [
+        "matcher": rule.matcher,
+        "file_path": path,
+        "status_code": Int(rule.statusCode),
+      ]
+      if let contentType = rule.contentType {
+        params["content_type"] = contentType
+      }
+      _ = try invokeRPC(method: "engine.rules_add_map_local_file", params: params)
+    case let .text(value):
+      var params: [String: Any] = [
+        "matcher": rule.matcher,
+        "text": value,
+        "status_code": Int(rule.statusCode),
+      ]
+      if let contentType = rule.contentType {
+        params["content_type"] = contentType
+      }
+      _ = try invokeRPC(method: "engine.rules_add_map_local_text", params: params)
+    }
+  }
+
+  func addMapRemoteRule(_ rule: MapRemoteRuleConfig) throws {
+    _ = try invokeRPC(
+      method: "engine.rules_add_map_remote",
+      params: [
+        "matcher": rule.matcher,
+        "destination": rule.destinationURL,
+      ]
+    )
+  }
+
+  func addStatusRewriteRule(_ rule: StatusRewriteRuleConfig) throws {
+    _ = try invokeRPC(
+      method: "engine.rules_add_status_rewrite",
+      params: [
+        "matcher": rule.matcher,
+        "from_status_code": rule.fromStatusCode ?? -1,
+        "to_status_code": Int(rule.toStatusCode),
+      ]
+    )
+  }
+
+  func start() throws {
+    _ = try invokeRPC(method: "proxy.start", params: [:])
+    startLogStreamingIfNeeded()
+  }
+
+  func stop() throws {
+    stopLogStreaming()
+    _ = try invokeRPC(method: "proxy.stop", params: [:], ensureDaemon: false)
+  }
+
+  func isRunning() -> Bool {
+    do {
+      let raw = try invokeRPC(method: "proxy.status", params: [:], ensureDaemon: false)
+      guard let payload = raw as? [String: Any], let status = payload["status"] as? String else {
+        return false
+      }
+      return status == "running"
+    } catch {
+      return false
+    }
+  }
+
+  private func pushThrottle() throws {
+    _ = try invokeRPC(
+      method: "engine.set_throttle",
+      params: [
+        "enabled": throttleEnabled,
+        "latency_ms": throttleLatencyMs,
+        "downstream_bps": throttleDownstreamBytesPerSecond,
+        "upstream_bps": throttleUpstreamBytesPerSecond,
+        "only_selected_hosts": throttleOnlySelectedHosts,
+        "selected_hosts": throttleSelectedHosts,
+      ]
+    )
+  }
+
+  private func pushClientAllowlist() throws {
+    _ = try invokeRPC(
+      method: "engine.set_client_allowlist",
+      params: [
+        "enabled": allowlistEnabled,
+        "ips": allowlistIPs,
+      ]
+    )
+  }
+
+  private func pushTransparent() throws {
+    _ = try invokeRPC(
+      method: "engine.set_transparent",
+      params: [
+        "enabled": transparentEnabled,
+        "listen_port": Int(transparentPort),
+      ]
+    )
+  }
+
+  private func invokeRPC(
+    method: String,
+    params: [String: Any],
+    ensureDaemon: Bool = true
+  ) throws -> Any {
+    if ensureDaemon {
+      try ensureDaemonStarted()
     }
 
-    deinit {
-        Self.logCallbackLock.lock()
-        let shouldClearCallback =
-            callbackUserData != nil && callbackUserData == Self.currentLogCallbackUserData
-        if shouldClearCallback {
-            crab_set_log_callback(nil, nil)
-            Self.currentLogCallbackUserData = nil
-        }
-        Self.logCallbackLock.unlock()
+    let token = try readToken()
+    let connection = try UnixLineConnection(path: socketPath)
 
-        callbackContext?.engine = nil
-        if let userData = callbackUserData {
-            Unmanaged<RustLogCallbackContext>.fromOpaque(userData).release()
-            callbackUserData = nil
-        }
-
-        if let h = handle {
-            _ = crab_proxy_stop(h)
-            crab_proxy_destroy(h)
-        }
+    defer {
+      connection.close()
     }
 
-    func setListenAddress(_ value: String) throws {
-        let h = try requireHandle()
-        let result = value.withCString { crab_proxy_set_listen_addr(h, $0) }
-        try Self.check(result)
+    let handshakeParams: [String: Any] = [
+      "protocol_version": 1,
+      "token": token,
+      "client_type": principal,
+    ]
+    try connection.sendRequest(id: 1, method: "system.handshake", params: handshakeParams)
+    let handshakeResponse = try connection.readResponse()
+    try throwIfRPCError(handshakeResponse)
+
+    try connection.sendRequest(id: 2, method: method, params: params)
+    let response = try connection.readResponse()
+    try throwIfRPCError(response)
+
+    return response["result"] ?? NSNull()
+  }
+
+  private func throwIfRPCError(_ response: [String: Any]) throws {
+    guard let errorPayload = response["error"] as? [String: Any] else {
+      return
     }
 
-    func setPort(_ value: UInt16) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_port(h, value)
-        try Self.check(result)
+    let code = (errorPayload["code"] as? NSNumber)?.intValue ?? -1
+    let message = (errorPayload["message"] as? String) ?? "Unknown RPC error"
+    throw RustProxyError.internalState("RPC error(\(code)): \(message)")
+  }
+
+  private func readToken() throws -> String {
+    let raw: String
+    do {
+      raw = try String(contentsOfFile: tokenPath, encoding: .utf8)
+    } catch {
+      throw RustProxyError.internalState(
+        "failed to read token file (\(tokenPath)): \(error.localizedDescription)"
+      )
+    }
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else {
+      throw RustProxyError.internalState("Token file is empty: \(tokenPath)")
+    }
+    return value
+  }
+
+  private func ensureDaemonStarted() throws {
+    if canConnectSocket() {
+      return
     }
 
-    func loadCA(certPath: String, keyPath: String) throws {
-        let h = try requireHandle()
-        let result = certPath.withCString { cert in
-            keyPath.withCString { key in
-                crab_proxy_load_ca(h, cert, key)
-            }
-        }
-        try Self.check(result)
+    if FileManager.default.fileExists(atPath: socketPath) {
+      try? FileManager.default.removeItem(atPath: socketPath)
     }
 
-    static func generateCA(
-        commonName: String,
-        days: UInt32,
-        certPath: String,
-        keyPath: String,
-        algorithm: CAKeyAlgorithm = .ecdsaP256
-    ) throws {
-        let result = commonName.withCString { cn in
-            certPath.withCString { cert in
-                keyPath.withCString { key in
-                    crab_ca_generate_with_algorithm(cn, days, cert, key, algorithm.rawValue)
+    do {
+      _ = try runDetached(
+        executablePath: crabdPath,
+        arguments: ["serve"]
+      )
+    } catch {
+      throw RustProxyError.internalState(
+        "failed to launch daemon (\(crabdPath)): \(error.localizedDescription)"
+      )
+    }
+
+    let timeout = Date().addingTimeInterval(3.0)
+    while Date() < timeout {
+      if canConnectSocket() {
+        return
+      }
+      usleep(50_000)
+    }
+
+    throw RustProxyError.internalState("daemon socket did not become available: \(socketPath)")
+  }
+
+  private func canConnectSocket() -> Bool {
+    do {
+      let connection = try UnixLineConnection(path: socketPath)
+      connection.close()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private func startLogStreamingIfNeeded() {
+    guard onLog != nil else { return }
+    guard !logStreamingActive else { return }
+    logStreamingActive = true
+
+    logQueue.async { [weak self] in
+      guard let self else { return }
+
+      var cursor = self.logTailCursor
+      while self.logStreamingActive {
+        autoreleasepool {
+          do {
+            let raw = try self.invokeRPC(
+              method: "logs.tail",
+              params: ["after_seq": cursor, "limit": 200],
+              ensureDaemon: false
+            )
+            if let payload = raw as? [String: Any] {
+              if let next = payload["next_seq"] as? NSNumber {
+                cursor = next.uint64Value
+              }
+              if let records = payload["records"] as? [[String: Any]] {
+                for record in records {
+                  guard let message = record["message"] as? String else { continue }
+                  let levelValue = (record["level"] as? NSNumber)?.uint8Value ?? 2
+                  self.onLog?(levelValue, message)
                 }
+              }
+              self.logTailCursor = cursor
             }
-        }
-        try Self.check(result)
-    }
-
-    func setInspectEnabled(_ enabled: Bool) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_inspect_enabled(h, enabled)
-        try Self.check(result)
-    }
-
-    func setThrottleEnabled(_ enabled: Bool) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_throttle_enabled(h, enabled)
-        try Self.check(result)
-    }
-
-    func setThrottleLatencyMs(_ latencyMs: UInt64) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_throttle_latency_ms(h, latencyMs)
-        try Self.check(result)
-    }
-
-    func setThrottleDownstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_throttle_downstream_bps(h, bytesPerSecond)
-        try Self.check(result)
-    }
-
-    func setThrottleUpstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_throttle_upstream_bps(h, bytesPerSecond)
-        try Self.check(result)
-    }
-
-    func setThrottleOnlySelectedHosts(_ enabled: Bool) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_throttle_only_selected_hosts(h, enabled)
-        try Self.check(result)
-    }
-
-    func clearThrottleSelectedHosts() throws {
-        let h = try requireHandle()
-        let result = crab_proxy_throttle_hosts_clear(h)
-        try Self.check(result)
-    }
-
-    func addThrottleSelectedHost(_ matcher: String) throws {
-        let h = try requireHandle()
-        let normalized = matcher.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else {
-            throw RustProxyError.internalState("throttle host matcher must not be empty")
-        }
-        let result = normalized.withCString {
-            crab_proxy_throttle_hosts_add(h, $0)
-        }
-        try Self.check(result)
-    }
-
-    func setClientAllowlistEnabled(_ enabled: Bool) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_client_allowlist_enabled(h, enabled)
-        try Self.check(result)
-    }
-
-    func clearClientAllowlist() throws {
-        let h = try requireHandle()
-        let result = crab_proxy_client_allowlist_clear(h)
-        try Self.check(result)
-    }
-
-    func addClientAllowlistIP(_ ipAddress: String) throws {
-        let h = try requireHandle()
-        let normalized = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else {
-            throw RustProxyError.internalState("client allowlist IP must not be empty")
-        }
-        let result = normalized.withCString { crab_proxy_client_allowlist_add_ip(h, $0) }
-        try Self.check(result)
-    }
-
-    func setTransparentEnabled(_ enabled: Bool) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_transparent_enabled(h, enabled)
-        try Self.check(result)
-    }
-
-    func setTransparentPort(_ port: UInt16) throws {
-        let h = try requireHandle()
-        let result = crab_proxy_set_transparent_port(h, port)
-        try Self.check(result)
-    }
-
-    func clearRules() throws {
-        let h = try requireHandle()
-        try Self.check(crab_proxy_rules_clear(h))
-    }
-
-    func addAllowRule(_ matcher: String) throws {
-        let h = try requireHandle()
-        let normalized = matcher.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else {
-            throw RustProxyError.internalState("allow matcher must not be empty")
-        }
-        let result = normalized.withCString {
-            crab_proxy_rules_add_allow(h, $0)
-        }
-        try Self.check(result)
-    }
-
-    func addMapLocalRule(_ rule: MapLocalRuleConfig) throws {
-        let h = try requireHandle()
-        try rule.matcher.withCString { matcher in
-            let contentType = rule.contentType?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalizedContentType = (contentType?.isEmpty == true) ? nil : contentType
-            try withOptionalCString(normalizedContentType) { contentTypePtr in
-                let result: CrabResult
-                switch rule.source {
-                case let .file(path):
-                    result = path.withCString { filePath in
-                        crab_proxy_rules_add_map_local_file(
-                            h,
-                            matcher,
-                            filePath,
-                            rule.statusCode,
-                            contentTypePtr
-                        )
-                    }
-                case let .text(value):
-                    result = value.withCString { text in
-                        crab_proxy_rules_add_map_local_text(
-                            h,
-                            matcher,
-                            text,
-                            rule.statusCode,
-                            contentTypePtr
-                        )
-                    }
-                }
-                try Self.check(result)
-            }
-        }
-    }
-
-    func addMapRemoteRule(_ rule: MapRemoteRuleConfig) throws {
-        let h = try requireHandle()
-        let matcher = rule.matcher.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !matcher.isEmpty else {
-            throw RustProxyError.internalState("map_remote matcher must not be empty")
-        }
-        let destination = rule.destinationURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !destination.isEmpty else {
-            throw RustProxyError.internalState("map_remote destination must not be empty")
-        }
-        let result = matcher.withCString { matcherPtr in
-            destination.withCString { destinationPtr in
-                crab_proxy_rules_add_map_remote(h, matcherPtr, destinationPtr)
-            }
-        }
-        try Self.check(result)
-    }
-
-    func addStatusRewriteRule(_ rule: StatusRewriteRuleConfig) throws {
-        let h = try requireHandle()
-        let fromStatus = Int32(rule.fromStatusCode ?? -1)
-        let toStatus = rule.toStatusCode
-        let result = rule.matcher.withCString {
-            crab_proxy_rules_add_status_rewrite(h, $0, fromStatus, toStatus)
-        }
-        try Self.check(result)
-    }
-
-    func start() throws {
-        let h = try requireHandle()
-        try Self.check(crab_proxy_start(h))
-    }
-
-    func stop() throws {
-        let h = try requireHandle()
-        try Self.check(crab_proxy_stop(h))
-    }
-
-    func isRunning() -> Bool {
-        guard let h = handle else { return false }
-        return crab_proxy_is_running(h)
-    }
-
-    fileprivate func receiveLog(level: UInt8, message: String) {
-        onLog?(level, message)
-    }
-
-    private func requireHandle() throws -> OpaquePointer {
-        guard let handle else {
-            throw RustProxyError.internalState("proxy handle is nil")
-        }
-        return handle
-    }
-
-    private static func check(_ result: CrabResult) throws {
-        if result.code == CRAB_OK {
-            if let message = result.message {
-                crab_free_string(message)
-            }
-            return
+          } catch {
+            // No-op: keep polling; daemon may be down during stop/restart windows.
+          }
         }
 
-        let message: String
-        if let raw = result.message {
-            message = String(cString: raw)
-            crab_free_string(raw)
-        } else {
-            message = "unknown error"
-        }
-
-        throw RustProxyError.ffi(code: result.code, message: message)
+        usleep(200_000)
+      }
     }
+  }
+
+  private func stopLogStreaming() {
+    logStreamingActive = false
+  }
+
+  private static func resolveBinaries() throws -> String {
+    let fm = FileManager.default
+
+    if let resourcesURL = Bundle.main.resourceURL {
+      let crabd = resourcesURL.appendingPathComponent("crabd").path
+      if fm.isExecutableFile(atPath: crabd) {
+        return crabd
+      }
+    }
+
+    let fallbackRoot = URL(
+      fileURLWithPath: "../crab-mitm/target/debug",
+      relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    ).standardizedFileURL
+    let fallbackCrabd = fallbackRoot.appendingPathComponent("crabd").path
+    if fm.isExecutableFile(atPath: fallbackCrabd) {
+      return fallbackCrabd
+    }
+
+    throw RustProxyError.internalState("crabd binary is missing from app resources")
+  }
+
+#if canImport(CCrabMitm)
+  private static func check(_ result: CrabResult) throws {
+    if result.code == CRAB_OK {
+      if let message = result.message {
+        crab_free_string(message)
+      }
+      return
+    }
+
+    let message: String
+    if let raw = result.message {
+      message = String(cString: raw)
+      crab_free_string(raw)
+    } else {
+      message = "unknown error"
+    }
+
+    throw RustProxyError.ffi(code: result.code, message: message)
+  }
+#endif
 }
 
-private func withOptionalCString<T>(
-    _ value: String?,
-    _ body: (UnsafePointer<CChar>?) throws -> T
-) throws -> T {
-    if let value {
-        return try value.withCString { ptr in
-            try body(ptr)
-        }
-    }
-    return try body(nil)
+@discardableResult
+private func runDetached(executablePath: String, arguments: [String]) throws -> Process {
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: executablePath)
+  process.arguments = arguments
+  process.standardInput = FileHandle.nullDevice
+  process.standardOutput = FileHandle.nullDevice
+  process.standardError = FileHandle.nullDevice
+  try process.run()
+  return process
 }
 
-private func rustLogCallbackBridge(
-    _ userData: UnsafeMutableRawPointer?,
-    _ level: UInt8,
-    _ message: UnsafePointer<CChar>?
-) {
-    guard let userData else { return }
-    let context = Unmanaged<RustLogCallbackContext>.fromOpaque(userData).takeUnretainedValue()
-    let text = message.map { String(cString: $0) } ?? ""
-    context.engine?.receiveLog(level: level, message: text)
+private final class UnixLineConnection {
+  private static let ioTimeoutMilliseconds: Int32 = 4_000
+  private var fd: Int32 = -1
+  private var readBuffer = Data()
+
+  init(path: String) throws {
+    let socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard socketFD >= 0 else {
+      throw RustProxyError.internalState("socket(AF_UNIX) failed: \(Self.lastErrnoString())")
+    }
+
+    do {
+      try Self.connect(fd: socketFD, path: path)
+      fd = socketFD
+    } catch {
+      Darwin.close(socketFD)
+      throw error
+    }
+  }
+
+  deinit {
+    close()
+  }
+
+  func close() {
+    if fd >= 0 {
+      Darwin.close(fd)
+      fd = -1
+    }
+  }
+
+  func sendRequest(id: Int, method: String, params: [String: Any]) throws {
+    guard fd >= 0 else {
+      throw RustProxyError.internalState("socket connection is closed")
+    }
+
+    let payload: [String: Any] = [
+      "jsonrpc": "2.0",
+      "id": id,
+      "method": method,
+      "params": params,
+    ]
+    let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+    var line = data
+    line.append(0x0A)
+    try writeAll(line)
+  }
+
+  func readResponse() throws -> [String: Any] {
+    let line = try readLine()
+    let object = try JSONSerialization.jsonObject(with: line, options: [.fragmentsAllowed])
+    guard let payload = object as? [String: Any] else {
+      throw RustProxyError.internalState("invalid RPC response payload")
+    }
+    return payload
+  }
+
+  private func readLine() throws -> Data {
+    guard fd >= 0 else {
+      throw RustProxyError.internalState("socket connection is closed")
+    }
+
+    while true {
+      if let newline = readBuffer.firstIndex(of: 0x0A) {
+        let line = readBuffer.subdata(in: 0..<newline)
+        readBuffer.removeSubrange(0...newline)
+        return line
+      }
+
+      try waitReadable()
+
+      var chunk = [UInt8](repeating: 0, count: 4096)
+      let readCount = Darwin.read(fd, &chunk, chunk.count)
+      if readCount > 0 {
+        readBuffer.append(contentsOf: chunk.prefix(Int(readCount)))
+        continue
+      }
+      if readCount == 0 {
+        throw RustProxyError.internalState("socket closed while waiting for response")
+      }
+      let code = errno
+      if code == EINTR {
+        continue
+      }
+      if code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT {
+        throw RustProxyError.internalState("RPC socket timed out while waiting for response")
+      }
+      throw RustProxyError.internalState("socket read failed: \(Self.lastErrnoString(code))")
+    }
+  }
+
+  private func writeAll(_ data: Data) throws {
+    guard fd >= 0 else {
+      throw RustProxyError.internalState("socket connection is closed")
+    }
+    try data.withUnsafeBytes { rawBuffer in
+      guard let base = rawBuffer.baseAddress else { return }
+      var offset = 0
+      while offset < rawBuffer.count {
+        let written = Darwin.write(fd, base.advanced(by: offset), rawBuffer.count - offset)
+        if written > 0 {
+          offset += written
+          continue
+        }
+        let code = errno
+        if code == EINTR {
+          continue
+        }
+        if code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT {
+          throw RustProxyError.internalState("RPC socket timed out while writing request")
+        }
+        throw RustProxyError.internalState("socket write failed: \(Self.lastErrnoString(code))")
+      }
+    }
+  }
+
+  private func waitReadable() throws {
+    guard fd >= 0 else {
+      throw RustProxyError.internalState("socket connection is closed")
+    }
+    var descriptor = Darwin.pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+    while true {
+      let polled = Darwin.poll(&descriptor, 1, Self.ioTimeoutMilliseconds)
+      if polled > 0 {
+        return
+      }
+      if polled == 0 {
+        throw RustProxyError.internalState("RPC socket timed out while waiting for response")
+      }
+      let code = errno
+      if code == EINTR {
+        continue
+      }
+      throw RustProxyError.internalState("poll() failed: \(Self.lastErrnoString(code))")
+    }
+  }
+
+  private static func connect(fd: Int32, path: String) throws {
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+#if os(macOS)
+    addr.sun_len = __uint8_t(MemoryLayout<sockaddr_un>.size)
+#endif
+
+    let maxPathLength = MemoryLayout.size(ofValue: addr.sun_path)
+    guard path.utf8.count < maxPathLength else {
+      throw RustProxyError.internalState("socket path is too long: \(path)")
+    }
+
+    withUnsafeMutablePointer(to: &addr.sun_path) { pointer in
+      pointer.withMemoryRebound(to: CChar.self, capacity: maxPathLength) { cString in
+        cString.initialize(repeating: 0, count: maxPathLength)
+        path.withCString { source in
+          _ = strlcpy(cString, source, maxPathLength)
+        }
+      }
+    }
+
+    let result = withUnsafePointer(to: &addr) { pointer -> Int32 in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+        Darwin.connect(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+
+    if result != 0 {
+      throw RustProxyError.internalState("connect(\(path)) failed: \(lastErrnoString())")
+    }
+  }
+
+  private static func lastErrnoString(_ code: Int32 = errno) -> String {
+    guard let cString = strerror(code) else {
+      return "errno \(code)"
+    }
+    return String(cString: cString)
+  }
+}
+
+private func lastErrnoString() -> String {
+  let code = errno
+  guard let cString = strerror(code) else {
+    return "errno \(code)"
+  }
+  return String(cString: cString)
 }

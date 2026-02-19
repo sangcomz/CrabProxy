@@ -427,7 +427,12 @@ final class ProxyViewModel: ObservableObject {
       statusText = isRunning ? "Running" : "Stopped"
     } catch {
       isRunning = false
-      statusText = "Start failed: \(error.localizedDescription)"
+      let nsError = error as NSError
+      if let filePath = nsError.userInfo[NSFilePathErrorKey] as? String {
+        statusText = "Start failed: \(error.localizedDescription) (\(filePath))"
+      } else {
+        statusText = "Start failed: \(error.localizedDescription) [\(nsError.domain):\(nsError.code)]"
+      }
     }
   }
 

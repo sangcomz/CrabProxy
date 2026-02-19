@@ -135,13 +135,17 @@ if command -v rustup >/dev/null 2>&1; then
 fi
 
 archives=()
+crabd_bins=()
+crabctl_bins=()
 for target in "${rust_targets[@]}"; do
-  build_cmd=(cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib --target "$target")
+  build_cmd=(cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib --bin crabd --bin crabctl --target "$target")
   if [[ "$PROFILE" == "release" ]]; then
     build_cmd+=(--release)
   fi
   "${build_cmd[@]}"
   archives+=("$RUST_DIR/target/$target/$PROFILE/libcrab_mitm.a")
+  crabd_bins+=("$RUST_DIR/target/$target/$PROFILE/crabd")
+  crabctl_bins+=("$RUST_DIR/target/$target/$PROFILE/crabctl")
 done
 
 OUTPUT_LIB="$RUST_DIR/target/$PROFILE/libcrab_mitm.a"
@@ -155,5 +159,36 @@ echo "Rust staticlib prepared at: $OUTPUT_LIB"
 /usr/bin/lipo -info "$OUTPUT_LIB" || true
 
 cp "$RUST_DIR/include/crab_mitm.h" "$APP_DIR/Sources/CCrabMitm/include/crab_mitm.h"
+
+OUTPUT_CRABD="$RUST_DIR/target/$PROFILE/crabd"
+OUTPUT_CRABCTL="$RUST_DIR/target/$PROFILE/crabctl"
+if [[ ${#crabd_bins[@]} -eq 1 ]]; then
+  cp "${crabd_bins[0]}" "$OUTPUT_CRABD"
+  cp "${crabctl_bins[0]}" "$OUTPUT_CRABCTL"
+else
+  /usr/bin/lipo -create "${crabd_bins[@]}" -output "$OUTPUT_CRABD"
+  /usr/bin/lipo -create "${crabctl_bins[@]}" -output "$OUTPUT_CRABCTL"
+fi
+
+echo "Rust daemon binary prepared at: $OUTPUT_CRABD"
+/usr/bin/lipo -info "$OUTPUT_CRABD" || true
+echo "Rust control binary prepared at: $OUTPUT_CRABCTL"
+/usr/bin/lipo -info "$OUTPUT_CRABCTL" || true
+
+if [[ -n "${TARGET_BUILD_DIR:-}" && -n "${UNLOCALIZED_RESOURCES_FOLDER_PATH:-}" ]]; then
+  resources_dir="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+  mkdir -p "$resources_dir"
+
+  cp "$OUTPUT_CRABD" "$resources_dir/crabd"
+  cp "$OUTPUT_CRABCTL" "$resources_dir/crabctl"
+  chmod 755 "$resources_dir/crabd" "$resources_dir/crabctl"
+
+  if command -v codesign >/dev/null 2>&1; then
+    /usr/bin/codesign --force --sign - --timestamp=none --identifier "com.sangcomz.CrabProxy.crabd" "$resources_dir/crabd" || true
+    /usr/bin/codesign --force --sign - --timestamp=none --identifier "com.sangcomz.crabctl" "$resources_dir/crabctl" || true
+  fi
+
+  echo "Packaged Rust binaries at: $resources_dir/crabd, $resources_dir/crabctl"
+fi
 
 build_helper_resource_binary

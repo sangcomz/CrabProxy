@@ -518,38 +518,11 @@ struct ContentView: View {
     }
 
     private func normalizedClientAppLabel(_ raw: String?) -> String {
-        if let raw {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        return "Unknown App"
+        normalizedClientAppDisplayLabel(raw)
     }
 
     private func canonicalClientAppLabel(_ raw: String?) -> String {
-        let normalized = normalizedClientAppLabel(raw)
-        if normalized.hasPrefix("LAN ") || normalized == "Unknown App" {
-            return normalized
-        }
-
-        var value = normalized
-        if let range = value.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
-            value.removeSubrange(range)
-        }
-        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        for suffix in [" Helper", "Helper", " Service"] {
-            if value.lowercased().hasSuffix(suffix.lowercased()) {
-                value = String(value.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-
-        if value.caseInsensitiveCompare("Code") == .orderedSame {
-            return "Visual Studio Code"
-        }
-
-        return value.isEmpty ? normalized : value
+        canonicalClientAppDisplayLabel(raw)
     }
 
     private func domainName(from urlString: String) -> String {
@@ -721,7 +694,7 @@ struct ContentView: View {
                 }
             }
             if let app = entry.clientApp {
-                DetailLine(title: "App", value: app)
+                DetailLine(title: "App", value: canonicalClientAppDisplayLabel(app))
             }
             if let platform = entry.clientPlatform {
                 DetailLine(title: "Client", value: platform.rawValue)
@@ -1333,7 +1306,7 @@ private struct TransactionRow: View {
                         .foregroundStyle(CrabTheme.secondaryText(for: colorScheme).opacity(0.9))
                 }
                 if let app = entry.clientApp {
-                    Text(app)
+                    Text(canonicalClientAppDisplayLabel(app))
                         .font(.custom("Avenir Next Demi Bold", size: 10))
                         .foregroundStyle(CrabTheme.secondaryTint(for: colorScheme))
                         .lineLimit(1)
@@ -1400,4 +1373,39 @@ private func formattedByteCount(_ bytes: Int64?) -> String? {
     formatter.includesCount = true
     formatter.isAdaptive = true
     return formatter.string(fromByteCount: bytes)
+}
+
+private func normalizedClientAppDisplayLabel(_ raw: String?) -> String {
+    if let raw {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+    }
+    return "Unknown App"
+}
+
+private func canonicalClientAppDisplayLabel(_ raw: String?) -> String {
+    let normalized = normalizedClientAppDisplayLabel(raw)
+    if normalized.hasPrefix("LAN ") || normalized == "Unknown App" {
+        return normalized
+    }
+
+    var value = normalized
+    if let range = value.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
+        value.removeSubrange(range)
+    }
+    value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    for suffix in [" Helper", "Helper", " Service"] {
+        if value.lowercased().hasSuffix(suffix.lowercased()) {
+            value = String(value.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    if value.caseInsensitiveCompare("Code") == .orderedSame {
+        return "Visual Studio Code"
+    }
+
+    return value.isEmpty ? normalized : value
 }

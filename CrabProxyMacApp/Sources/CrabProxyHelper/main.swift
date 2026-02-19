@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -52,28 +53,31 @@ final class HelperDelegate: NSObject, NSXPCListenerDelegate, CrabProxyHelperProt
   }
 
   private func guestProcessIdentity(pid: pid_t) -> CodeSigningIdentity? {
-    var code: SecCode?
-    let attributes = [kSecGuestAttributePid: pid] as NSDictionary as CFDictionary
-    guard
-      SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code) == errSecSuccess,
-      let guestCode = code
-    else {
-      return nil
-    }
-
-    guard SecCodeCheckValidity(guestCode, SecCSFlags(), nil) == errSecSuccess else {
+    guard let executablePath = executablePath(for: pid) else {
       return nil
     }
 
     var staticCode: SecStaticCode?
+    let executableURL = URL(fileURLWithPath: executablePath) as CFURL
     guard
-      SecCodeCopyStaticCode(guestCode, SecCSFlags(), &staticCode) == errSecSuccess,
+      SecStaticCodeCreateWithPath(executableURL, SecCSFlags(), &staticCode) == errSecSuccess,
       let guestStaticCode = staticCode
     else {
       return nil
     }
 
     return signingIdentity(from: guestStaticCode)
+  }
+
+  private func executablePath(for pid: pid_t) -> String? {
+    // proc_pidpath writes a null-terminated absolute path into the provided buffer.
+    var buffer = [CChar](repeating: 0, count: 4096)
+    let result = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+    guard result > 0 else {
+      return nil
+    }
+    let utf8Bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+    return String(decoding: utf8Bytes, as: UTF8.self)
   }
 
   private func signingIdentity(from staticCode: SecStaticCode) -> CodeSigningIdentity? {
