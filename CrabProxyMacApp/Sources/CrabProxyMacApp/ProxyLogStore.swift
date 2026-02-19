@@ -17,6 +17,8 @@ struct ProxyLogEntry: Identifiable, Hashable {
     let statusCode: String?
     let peer: String?
     let mapLocalMatcher: String?
+    let mapRemoteMatcher: String?
+    let mapRemoteTarget: String?
     var clientPlatform: ClientPlatform?
     var clientApp: String?
     let durationMs: Double?
@@ -233,6 +235,8 @@ final class ProxyLogStore {
             let status = statusField(in: object)
             let peer = stringField("peer", in: object)
             let mapLocal = stringField("map_local", in: object)
+            let mapRemote = stringField("map_remote", in: object)
+            let mapRemoteTo = stringField("map_remote_to", in: object)
             let clientPlatform = inferClientPlatform(requestHeaders: nil, peer: peer)
             let clientApp = inferClientApp(peer: peer, clientPlatform: clientPlatform)
             let durationMs = doubleField("duration_ms", in: object)
@@ -257,6 +261,8 @@ final class ProxyLogStore {
                     statusCode: status,
                     peer: peer,
                     mapLocalMatcher: mapLocal,
+                    mapRemoteMatcher: mapRemote,
+                    mapRemoteTarget: mapRemoteTo,
                     clientPlatform: clientPlatform,
                     clientApp: clientApp,
                     durationMs: durationMs,
@@ -501,6 +507,8 @@ final class ProxyLogStore {
         let clientApp = inferClientApp(peer: peer, clientPlatform: clientPlatform)
         let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
         let mapLocal = Self.firstCapture(Self.mapLocalRegex, in: line)
+        let mapRemote = Self.firstCapture(Self.mapRemoteRegex, in: line)
+        let mapRemoteTo = Self.firstCapture(Self.mapRemoteToRegex, in: line)
 
         return ProxyLogEntry(
             id: UUID(),
@@ -514,6 +522,8 @@ final class ProxyLogStore {
             statusCode: statusCode,
             peer: peer,
             mapLocalMatcher: mapLocal,
+            mapRemoteMatcher: mapRemote,
+            mapRemoteTarget: mapRemoteTo,
             clientPlatform: clientPlatform,
             clientApp: clientApp,
             durationMs: nil,
@@ -714,6 +724,8 @@ final class ProxyLogStore {
     )
     private static let peerRegex = try! NSRegularExpression(pattern: #"peer=([^\s]+)"#)
     private static let mapLocalRegex = try! NSRegularExpression(pattern: #"map_local=([^\s]+)"#)
+    private static let mapRemoteRegex = try! NSRegularExpression(pattern: #"map_remote=([^\s]+)"#)
+    private static let mapRemoteToRegex = try! NSRegularExpression(pattern: #"map_remote_to=([^\s]+)"#)
     private static let requestIDRegex = try! NSRegularExpression(pattern: #"request_id=([^\s]+)"#)
     private static let headersB64Regex = try! NSRegularExpression(pattern: #"headers_b64=([A-Za-z0-9+/=]+)"#)
     private static let sampleB64Regex = try! NSRegularExpression(pattern: #"sample_b64=([A-Za-z0-9+/=]+)"#)

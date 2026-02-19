@@ -841,6 +841,11 @@ struct RulesSettingsView: View {
         let editingRuleID: UUID?
     }
 
+    private struct MapRemoteEditorState: Identifiable {
+        let id = UUID()
+        let editingRuleID: UUID?
+    }
+
     private struct StatusRewriteEditorState: Identifiable {
         let id = UUID()
         let editingRuleID: UUID?
@@ -849,8 +854,10 @@ struct RulesSettingsView: View {
     @ObservedObject var model: ProxyViewModel
     @State private var draftAllowRules: [AllowRuleInput] = []
     @State private var draftMapLocalRules: [MapLocalRuleInput] = []
+    @State private var draftMapRemoteRules: [MapRemoteRuleInput] = []
     @State private var draftStatusRewriteRules: [StatusRewriteRuleInput] = []
     @State private var mapLocalEditorState: MapLocalEditorState?
+    @State private var mapRemoteEditorState: MapRemoteEditorState?
     @State private var statusRewriteEditorState: StatusRewriteEditorState?
     @State private var didInitializeDrafts = false
     @Environment(\.colorScheme) private var colorScheme
@@ -858,6 +865,7 @@ struct RulesSettingsView: View {
     private var hasUnsavedChanges: Bool {
         draftAllowRules != model.allowRules
             || draftMapLocalRules != model.mapLocalRules
+            || draftMapRemoteRules != model.mapRemoteRules
             || draftStatusRewriteRules != model.statusRewriteRules
     }
 
@@ -868,7 +876,7 @@ struct RulesSettingsView: View {
                     .font(.custom("Avenir Next Demi Bold", size: 24))
                     .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
 
-                Text("Allowlist / Map Local / Status Rewrite rules are applied immediately when you press Save Changes.")
+                Text("Allowlist / Map Local / Map Remote / Status Rewrite rules are applied immediately when you press Save Changes.")
                     .font(.custom("Avenir Next Medium", size: 13))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
@@ -896,6 +904,7 @@ struct RulesSettingsView: View {
 
                 allowListSection
                 mapLocalSection
+                mapRemoteSection
                 statusRewriteSection
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -905,12 +914,16 @@ struct RulesSettingsView: View {
             loadDraftsFromModel(force: !didInitializeDrafts)
             consumeStagedAllowRuleIfNeeded()
             consumeStagedMapLocalRuleIfNeeded()
+            consumeStagedMapRemoteRuleIfNeeded()
             consumeStagedStatusRewriteRuleIfNeeded()
         }
         .onChange(of: model.allowRules) { _, _ in
             loadDraftsFromModel(force: false)
         }
         .onChange(of: model.mapLocalRules) { _, _ in
+            loadDraftsFromModel(force: false)
+        }
+        .onChange(of: model.mapRemoteRules) { _, _ in
             loadDraftsFromModel(force: false)
         }
         .onChange(of: model.statusRewriteRules) { _, _ in
@@ -931,6 +944,20 @@ struct RulesSettingsView: View {
                 onPickFile: {
                     pickMapLocalSourceFile()
                 }
+            )
+        }
+        .sheet(item: $mapRemoteEditorState) { editorState in
+            MapRemoteRuleEditorSheet(
+                initialRule: mapRemoteRuleForEditor(editorState.editingRuleID),
+                onSave: { editedRule in
+                    saveMapRemoteRule(editedRule, editingRuleID: editorState.editingRuleID)
+                    mapRemoteEditorState = nil
+                },
+                onDelete: {
+                    deleteMapRemoteRule(editorState.editingRuleID)
+                    mapRemoteEditorState = nil
+                },
+                allowDelete: editorState.editingRuleID != nil
             )
         }
         .sheet(item: $statusRewriteEditorState) { editorState in
@@ -1126,15 +1153,83 @@ struct RulesSettingsView: View {
         .background(GlassCard())
     }
 
+    private var mapRemoteSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Map Remote")
+                    .font(.custom("Avenir Next Demi Bold", size: 18))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                Spacer()
+                Button("Add Rule") {
+                    mapRemoteEditorState = MapRemoteEditorState(editingRuleID: nil)
+                }
+                .tint(CrabTheme.primaryTint(for: colorScheme))
+            }
+
+            if draftMapRemoteRules.isEmpty {
+                EmptyRuleHint(text: "No map-remote rule yet")
+            } else {
+                ForEach($draftMapRemoteRules) { $rule in
+                    HStack(spacing: 10) {
+                        Toggle("", isOn: $rule.isEnabled)
+                            .toggleStyle(.checkbox)
+                            .labelsHidden()
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(rule.matcher.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(empty URL)" : rule.matcher)
+                                .font(.custom("Menlo", size: 12))
+                                .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+
+                            Text(rule.destinationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(empty destination)" : rule.destinationURL)
+                                .font(.custom("Avenir Next Medium", size: 11))
+                                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
+                        Spacer()
+
+                        Button("Edit") {
+                            mapRemoteEditorState = MapRemoteEditorState(editingRuleID: rule.id)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(role: .destructive) {
+                            draftMapRemoteRules.removeAll { $0.id == rule.id }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(CrabTheme.ruleCardFill(for: colorScheme))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                            )
+                    )
+                }
+            }
+        }
+        .padding(14)
+        .background(GlassCard())
+    }
+
     private func loadDraftsFromModel(force: Bool) {
         if !force && didInitializeDrafts && hasUnsavedChanges {
             return
         }
         draftAllowRules = model.allowRules
         draftMapLocalRules = model.mapLocalRules
+        draftMapRemoteRules = model.mapRemoteRules
         draftStatusRewriteRules = model.statusRewriteRules
         if force {
             mapLocalEditorState = nil
+            mapRemoteEditorState = nil
             statusRewriteEditorState = nil
         }
         didInitializeDrafts = true
@@ -1147,6 +1242,7 @@ struct RulesSettingsView: View {
         model.saveRules(
             allowRules: draftAllowRules,
             mapLocalRules: draftMapLocalRules,
+            mapRemoteRules: draftMapRemoteRules,
             statusRewriteRules: draftStatusRewriteRules
         )
         if model.allowRules.count > originalAllowCount {
@@ -1181,6 +1277,19 @@ struct RulesSettingsView: View {
         if !alreadyExists {
             draftMapLocalRules.append(staged)
             mapLocalEditorState = MapLocalEditorState(editingRuleID: staged.id)
+        }
+    }
+
+    private func consumeStagedMapRemoteRuleIfNeeded() {
+        guard let staged = model.consumeStagedMapRemoteRule() else { return }
+        let alreadyExists = draftMapRemoteRules.contains {
+            $0.matcher == staged.matcher
+                && $0.isEnabled == staged.isEnabled
+                && $0.destinationURL == staged.destinationURL
+        }
+        if !alreadyExists {
+            draftMapRemoteRules.append(staged)
+            mapRemoteEditorState = MapRemoteEditorState(editingRuleID: staged.id)
         }
     }
 
@@ -1228,6 +1337,28 @@ struct RulesSettingsView: View {
             return StatusRewriteRuleInput()
         }
         return draftStatusRewriteRules.first(where: { $0.id == editingRuleID }) ?? StatusRewriteRuleInput()
+    }
+
+    private func mapRemoteRuleForEditor(_ editingRuleID: UUID?) -> MapRemoteRuleInput {
+        guard let editingRuleID else {
+            return MapRemoteRuleInput()
+        }
+        return draftMapRemoteRules.first(where: { $0.id == editingRuleID }) ?? MapRemoteRuleInput()
+    }
+
+    private func saveMapRemoteRule(_ rule: MapRemoteRuleInput, editingRuleID: UUID?) {
+        if let editingRuleID,
+           let index = draftMapRemoteRules.firstIndex(where: { $0.id == editingRuleID })
+        {
+            draftMapRemoteRules[index] = rule
+            return
+        }
+        draftMapRemoteRules.append(rule)
+    }
+
+    private func deleteMapRemoteRule(_ editingRuleID: UUID?) {
+        guard let editingRuleID else { return }
+        draftMapRemoteRules.removeAll { $0.id == editingRuleID }
     }
 
     private func saveStatusRewriteRule(_ rule: StatusRewriteRuleInput, editingRuleID: UUID?) {
@@ -1385,6 +1516,90 @@ private struct MapLocalRuleEditorSheet: View {
         }
         .padding(16)
         .frame(minWidth: 620, minHeight: 360, alignment: .topLeading)
+    }
+}
+
+private struct MapRemoteRuleEditorSheet: View {
+    let onSave: (MapRemoteRuleInput) -> Void
+    let onDelete: () -> Void
+    let allowDelete: Bool
+
+    @State private var draftRule: MapRemoteRuleInput
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(
+        initialRule: MapRemoteRuleInput,
+        onSave: @escaping (MapRemoteRuleInput) -> Void,
+        onDelete: @escaping () -> Void,
+        allowDelete: Bool
+    ) {
+        self.onSave = onSave
+        self.onDelete = onDelete
+        self.allowDelete = allowDelete
+        _draftRule = State(initialValue: initialRule)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(allowDelete ? "Edit Map Remote Rule" : "New Map Remote Rule")
+                    .font(.custom("Avenir Next Demi Bold", size: 20))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                Spacer()
+                Toggle("Enabled", isOn: $draftRule.isEnabled)
+                    .toggleStyle(.checkbox)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("URL")
+                    .font(.custom("Avenir Next Demi Bold", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                TextField("Match URL prefix", text: $draftRule.matcher)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Destination URL")
+                    .font(.custom("Avenir Next Demi Bold", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                TextField("https://staging.example.com/api", text: $draftRule.destinationURL)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Text("Destination must be an absolute URL with http/https.")
+                .font(.custom("Avenir Next Medium", size: 11))
+                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+            Spacer(minLength: 0)
+
+            HStack {
+                if allowDelete {
+                    Button(role: .destructive) {
+                        onDelete()
+                        dismiss()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Spacer()
+
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Done") {
+                    onSave(draftRule)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 620, minHeight: 260, alignment: .topLeading)
     }
 }
 

@@ -15,17 +15,20 @@ struct ProxyRuleManager {
     private struct ValidatedRules {
         let allowMatchers: [String]
         let mapLocalRules: [MapLocalRuleConfig]
+        let mapRemoteRules: [MapRemoteRuleConfig]
         let statusRewriteRules: [StatusRewriteRuleConfig]
     }
 
     func validateRules(
         allowRules: [AllowRuleInput],
         mapLocalRules: [MapLocalRuleInput],
+        mapRemoteRules: [MapRemoteRuleInput],
         statusRewriteRules: [StatusRewriteRuleInput]
     ) throws {
         _ = try buildValidatedRules(
             allowRules: allowRules,
             mapLocalRules: mapLocalRules,
+            mapRemoteRules: mapRemoteRules,
             statusRewriteRules: statusRewriteRules
         )
     }
@@ -34,11 +37,13 @@ struct ProxyRuleManager {
         to engine: RustProxyEngine,
         allowRules: [AllowRuleInput],
         mapLocalRules: [MapLocalRuleInput],
+        mapRemoteRules: [MapRemoteRuleInput],
         statusRewriteRules: [StatusRewriteRuleInput]
     ) throws {
         let validated = try buildValidatedRules(
             allowRules: allowRules,
             mapLocalRules: mapLocalRules,
+            mapRemoteRules: mapRemoteRules,
             statusRewriteRules: statusRewriteRules
         )
 
@@ -50,6 +55,10 @@ struct ProxyRuleManager {
 
         for rule in validated.mapLocalRules {
             try engine.addMapLocalRule(rule)
+        }
+
+        for rule in validated.mapRemoteRules {
+            try engine.addMapRemoteRule(rule)
         }
 
         for rule in validated.statusRewriteRules {
@@ -77,6 +86,7 @@ struct ProxyRuleManager {
     private func buildValidatedRules(
         allowRules: [AllowRuleInput],
         mapLocalRules: [MapLocalRuleInput],
+        mapRemoteRules: [MapRemoteRuleInput],
         statusRewriteRules: [StatusRewriteRuleInput]
     ) throws -> ValidatedRules {
         let normalizedAllowRules = normalizedAllowMatchers(from: allowRules)
@@ -128,6 +138,41 @@ struct ProxyRuleManager {
             )
         }
 
+        var normalizedMapRemoteRules: [MapRemoteRuleConfig] = []
+        for (index, draft) in mapRemoteRules.enumerated() {
+            if !draft.isEnabled {
+                continue
+            }
+
+            let matcher = trimmed(draft.matcher)
+            let destinationURL = trimmed(draft.destinationURL)
+
+            if matcher.isEmpty && destinationURL.isEmpty {
+                continue
+            }
+            guard !matcher.isEmpty else {
+                throw ProxyRuleSyncError.invalidValue(
+                    "Map Remote #\(index + 1): matcher is required"
+                )
+            }
+            guard !destinationURL.isEmpty else {
+                throw ProxyRuleSyncError.invalidValue(
+                    "Map Remote #\(index + 1): destination URL is required"
+                )
+            }
+            try validateMapRemoteDestination(
+                destinationURL,
+                field: "Map Remote #\(index + 1) destination"
+            )
+
+            normalizedMapRemoteRules.append(
+                MapRemoteRuleConfig(
+                    matcher: matcher,
+                    destinationURL: destinationURL
+                )
+            )
+        }
+
         var normalizedStatusRewriteRules: [StatusRewriteRuleConfig] = []
         for (index, draft) in statusRewriteRules.enumerated() {
             if !draft.isEnabled {
@@ -166,6 +211,7 @@ struct ProxyRuleManager {
         return ValidatedRules(
             allowMatchers: normalizedAllowRules,
             mapLocalRules: normalizedMapLocalRules,
+            mapRemoteRules: normalizedMapRemoteRules,
             statusRewriteRules: normalizedStatusRewriteRules
         )
     }
@@ -201,6 +247,24 @@ struct ProxyRuleManager {
             )
         }
         return code
+    }
+
+    private func validateMapRemoteDestination(_ input: String, field: String) throws {
+        guard let components = URLComponents(string: input) else {
+            throw ProxyRuleSyncError.invalidValue(
+                "\(field) must be a valid absolute URL"
+            )
+        }
+        guard let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            throw ProxyRuleSyncError.invalidValue(
+                "\(field) scheme must be http or https"
+            )
+        }
+        guard let host = components.host, !host.isEmpty else {
+            throw ProxyRuleSyncError.invalidValue(
+                "\(field) must include host"
+            )
+        }
     }
 
     private func trimmed(_ value: String) -> String {

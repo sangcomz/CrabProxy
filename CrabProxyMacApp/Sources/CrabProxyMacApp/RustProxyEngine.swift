@@ -29,6 +29,11 @@ struct MapLocalRuleConfig {
     var contentType: String?
 }
 
+struct MapRemoteRuleConfig {
+    var matcher: String
+    var destinationURL: String
+}
+
 struct StatusRewriteRuleConfig {
     var matcher: String
     var fromStatusCode: Int?
@@ -277,6 +282,24 @@ final class RustProxyEngine {
                 try Self.check(result)
             }
         }
+    }
+
+    func addMapRemoteRule(_ rule: MapRemoteRuleConfig) throws {
+        let h = try requireHandle()
+        let matcher = rule.matcher.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !matcher.isEmpty else {
+            throw RustProxyError.internalState("map_remote matcher must not be empty")
+        }
+        let destination = rule.destinationURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty else {
+            throw RustProxyError.internalState("map_remote destination must not be empty")
+        }
+        let result = matcher.withCString { matcherPtr in
+            destination.withCString { destinationPtr in
+                crab_proxy_rules_add_map_remote(h, matcherPtr, destinationPtr)
+            }
+        }
+        try Self.check(result)
     }
 
     func addStatusRewriteRule(_ rule: StatusRewriteRuleConfig) throws {

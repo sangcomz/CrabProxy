@@ -73,6 +73,12 @@ final class ProxyViewModel: ObservableObject {
     var contentType: String
   }
 
+  private struct PersistedMapRemoteRule: Codable {
+    var isEnabled: Bool?
+    var matcher: String
+    var destinationURL: String
+  }
+
   private struct PersistedStatusRewriteRule: Codable {
     var isEnabled: Bool?
     var matcher: String
@@ -182,10 +188,12 @@ final class ProxyViewModel: ObservableObject {
   @Published private(set) var filteredLogs: [ProxyLogEntry] = []
   @Published var selectedLogID: ProxyLogEntry.ID?
   @Published var stagedMapLocalRule: MapLocalRuleInput?
+  @Published var stagedMapRemoteRule: MapRemoteRuleInput?
   @Published var stagedAllowRule: AllowRuleInput?
   @Published var stagedStatusRewriteRule: StatusRewriteRuleInput?
   @Published var allowRules: [AllowRuleInput] = []
   @Published var mapLocalRules: [MapLocalRuleInput] = []
+  @Published var mapRemoteRules: [MapRemoteRuleInput] = []
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
 
   private var engine: RustProxyEngine?
@@ -193,6 +201,7 @@ final class ProxyViewModel: ObservableObject {
   private let ruleManager = ProxyRuleManager()
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
   private static let mapLocalRulesDefaultsKey = "CrabProxyMacApp.mapLocalRules.v1"
+  private static let mapRemoteRulesDefaultsKey = "CrabProxyMacApp.mapRemoteRules.v1"
   private static let statusRewriteRulesDefaultsKey = "CrabProxyMacApp.statusRewriteRules.v1"
   private static let allowLANConnectionsDefaultsKey = "CrabProxyMacApp.network.allowLANConnections.v1"
   private static let lanClientAllowlistDefaultsKey =
@@ -249,6 +258,7 @@ final class ProxyViewModel: ObservableObject {
     self.systemProxyService = systemProxyService
     allowRules = Self.loadAllowRules()
     mapLocalRules = Self.loadMapLocalRules()
+    mapRemoteRules = Self.loadMapRemoteRules()
     statusRewriteRules = Self.loadStatusRewriteRules()
     allowLANConnections = Self.loadAllowLANConnections()
     lanClientAllowlist = Self.loadLANClientAllowlist()
@@ -800,6 +810,22 @@ final class ProxyViewModel: ObservableObject {
     return rule
   }
 
+  func stageMapRemoteRule(from entry: ProxyLogEntry) {
+    let matcher = defaultMapLocalMatcher(from: entry.url)
+    stagedMapRemoteRule = MapRemoteRuleInput(
+      isEnabled: true,
+      matcher: matcher,
+      destinationURL: ""
+    )
+    statusText = "Map Remote draft added. Enter destination URL and save changes."
+  }
+
+  func consumeStagedMapRemoteRule() -> MapRemoteRuleInput? {
+    let rule = stagedMapRemoteRule
+    stagedMapRemoteRule = nil
+    return rule
+  }
+
   func stageAllowRule(from entry: ProxyLogEntry) {
     guard let matcher = defaultAllowMatcher(from: entry.url) else {
       statusText = "Cannot derive allowlist matcher from selected request."
@@ -862,17 +888,20 @@ final class ProxyViewModel: ObservableObject {
   func saveRules(
     allowRules: [AllowRuleInput],
     mapLocalRules: [MapLocalRuleInput],
+    mapRemoteRules: [MapRemoteRuleInput],
     statusRewriteRules: [StatusRewriteRuleInput]
   ) {
-    let mergedAllowRules = mergedAllowRulesForMapLocal(
+    let mergedAllowRules = mergedAllowRulesForMappedRules(
       allowRules: allowRules,
-      mapLocalRules: mapLocalRules
+      mapLocalRules: mapLocalRules,
+      mapRemoteRules: mapRemoteRules
     )
 
     do {
       try ruleManager.validateRules(
         allowRules: mergedAllowRules,
         mapLocalRules: mapLocalRules,
+        mapRemoteRules: mapRemoteRules,
         statusRewriteRules: statusRewriteRules
       )
     } catch {
@@ -882,10 +911,12 @@ final class ProxyViewModel: ObservableObject {
 
     self.allowRules = mergedAllowRules
     self.mapLocalRules = mapLocalRules
+    self.mapRemoteRules = mapRemoteRules
     self.statusRewriteRules = statusRewriteRules
     // Persist immediately so values survive app/tab transitions even if app exits quickly.
     persistAllowRules()
     persistMapLocalRules()
+    persistMapRemoteRules()
     persistStatusRewriteRules()
 
     do {
@@ -956,6 +987,7 @@ final class ProxyViewModel: ObservableObject {
       to: engine,
       allowRules: allowRules,
       mapLocalRules: mapLocalRules,
+      mapRemoteRules: mapRemoteRules,
       statusRewriteRules: statusRewriteRules
     )
   }
@@ -1610,6 +1642,13 @@ final class ProxyViewModel: ObservableObject {
       }
       .store(in: &cancellables)
 
+    $mapRemoteRules
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistMapRemoteRules()
+      }
+      .store(in: &cancellables)
+
     $statusRewriteRules
       .dropFirst()
       .sink { [weak self] _ in
@@ -1711,9 +1750,10 @@ final class ProxyViewModel: ObservableObject {
       || (scheme == "http" && port == 80)
   }
 
-  private func mergedAllowRulesForMapLocal(
+  private func mergedAllowRulesForMappedRules(
     allowRules: [AllowRuleInput],
-    mapLocalRules: [MapLocalRuleInput]
+    mapLocalRules: [MapLocalRuleInput],
+    mapRemoteRules: [MapRemoteRuleInput]
   ) -> [AllowRuleInput] {
     // Empty allowlist means "allow all"; don't force a restrictive list.
     guard !allowRules.isEmpty else { return allowRules }
@@ -1724,6 +1764,20 @@ final class ProxyViewModel: ObservableObject {
     )
 
     for rule in mapLocalRules {
+      if !rule.isEnabled {
+        continue
+      }
+      guard
+        let matcher = allowMatcherCandidate(fromRawMatcher: rule.matcher)
+      else { continue }
+
+      let normalized = matcher.lowercased()
+      if seen.insert(normalized).inserted {
+        merged.append(AllowRuleInput(matcher: matcher))
+      }
+    }
+
+    for rule in mapRemoteRules {
       if !rule.isEnabled {
         continue
       }
@@ -1812,6 +1866,18 @@ final class ProxyViewModel: ObservableObject {
     UserDefaults.standard.set(data, forKey: Self.mapLocalRulesDefaultsKey)
   }
 
+  private func persistMapRemoteRules() {
+    let payload = mapRemoteRules.map { rule in
+      PersistedMapRemoteRule(
+        isEnabled: rule.isEnabled,
+        matcher: rule.matcher,
+        destinationURL: rule.destinationURL
+      )
+    }
+    guard let data = try? JSONEncoder().encode(payload) else { return }
+    UserDefaults.standard.set(data, forKey: Self.mapRemoteRulesDefaultsKey)
+  }
+
   private func persistStatusRewriteRules() {
     let payload = statusRewriteRules.map { rule in
       PersistedStatusRewriteRule(
@@ -1897,6 +1963,24 @@ final class ProxyViewModel: ObservableObject {
         sourceValue: item.sourceValue,
         statusCode: item.statusCode,
         contentType: item.contentType
+      )
+    }
+  }
+
+  private static func loadMapRemoteRules() -> [MapRemoteRuleInput] {
+    let defaults = UserDefaults.standard
+    guard let data = defaults.data(forKey: Self.mapRemoteRulesDefaultsKey) else {
+      return []
+    }
+    guard let saved = try? JSONDecoder().decode([PersistedMapRemoteRule].self, from: data) else {
+      return []
+    }
+
+    return saved.map { item in
+      MapRemoteRuleInput(
+        isEnabled: item.isEnabled ?? true,
+        matcher: item.matcher,
+        destinationURL: item.destinationURL
       )
     }
   }

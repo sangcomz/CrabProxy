@@ -35,6 +35,25 @@ struct MapLocalRuleInput: Identifiable, Hashable {
     }
 }
 
+struct MapRemoteRuleInput: Identifiable, Hashable {
+    let id: UUID
+    var isEnabled: Bool
+    var matcher: String
+    var destinationURL: String
+
+    init(
+        id: UUID = UUID(),
+        isEnabled: Bool = true,
+        matcher: String = "",
+        destinationURL: String = ""
+    ) {
+        self.id = id
+        self.isEnabled = isEnabled
+        self.matcher = matcher
+        self.destinationURL = destinationURL
+    }
+}
+
 struct StatusRewriteRuleInput: Identifiable, Hashable {
     let id: UUID
     var isEnabled: Bool

@@ -17,7 +17,7 @@ macOS 앱/API 트래픽과 동일 LAN의 모바일(iOS/Android) 트래픽 분석
 - 상태 코드 필터 (`All`, `1xx`, `2xx`, `3xx`, `4xx`, `5xx`)
 - 상세 탭: `Summary`, `Headers`, `Body`, `Query`
 - 컨텍스트 액션: `Replay`, `Add to Allowlist`, `Add to Map Local`, `Add to Rewrite`
-- Rules UI: `Allowlist`, `Map Local`(file/text), `Status Rewrite`
+- Rules UI: `Allowlist`, `Map Local`(file/text), `Map Remote`, `Status Rewrite`
 - 모바일 설정:
   - LAN 프록시 엔드포인트 안내
   - 허용 디바이스 IP 목록 + 승인 팝업

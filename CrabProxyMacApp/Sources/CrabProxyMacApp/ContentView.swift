@@ -591,6 +591,11 @@ struct ContentView: View {
                                         settingsTabRawValue = "Rules"
                                         currentScreenRawValue = MainScreen.settings.rawValue
                                     }
+                                    Button("Add to Map Remote") {
+                                        model.stageMapRemoteRule(from: entry)
+                                        settingsTabRawValue = "Rules"
+                                        currentScreenRawValue = MainScreen.settings.rawValue
+                                    }
                                     Button("Add to Rewrite") {
                                         model.stageStatusRewriteRule(from: entry)
                                         settingsTabRawValue = "Rules"
@@ -707,6 +712,13 @@ struct ContentView: View {
             }
             if let matcher = entry.mapLocalMatcher {
                 DetailLine(title: "Map Local", value: matcher)
+            }
+            if let matcher = entry.mapRemoteMatcher {
+                if let target = entry.mapRemoteTarget {
+                    DetailLine(title: "Map Remote", value: "\(matcher) -> \(target)")
+                } else {
+                    DetailLine(title: "Map Remote", value: matcher)
+                }
             }
             if let app = entry.clientApp {
                 DetailLine(title: "App", value: app)

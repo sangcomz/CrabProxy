@@ -23,7 +23,7 @@ It is built for app/API debugging on macOS and on mobile devices in the same LAN
 - Status filters (`All`, `1xx`, `2xx`, `3xx`, `4xx`, `5xx`).
 - Detail tabs: `Summary`, `Headers`, `Body`, `Query`.
 - Context actions: `Replay`, `Add to Allowlist`, `Add to Map Local`, `Add to Rewrite`.
-- Rules UI: `Allowlist`, `Map Local` (file/text), `Status Rewrite`.
+- Rules UI: `Allowlist`, `Map Local` (file/text), `Map Remote`, `Status Rewrite`.
 - Mobile setup:
   - LAN proxy endpoint guidance.
   - Device IP allowlist + approval prompt.
