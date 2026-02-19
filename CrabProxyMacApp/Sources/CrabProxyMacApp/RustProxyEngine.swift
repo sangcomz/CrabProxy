@@ -194,6 +194,28 @@ final class RustProxyEngine {
         try Self.check(result)
     }
 
+    func setClientAllowlistEnabled(_ enabled: Bool) throws {
+        let h = try requireHandle()
+        let result = crab_proxy_set_client_allowlist_enabled(h, enabled)
+        try Self.check(result)
+    }
+
+    func clearClientAllowlist() throws {
+        let h = try requireHandle()
+        let result = crab_proxy_client_allowlist_clear(h)
+        try Self.check(result)
+    }
+
+    func addClientAllowlistIP(_ ipAddress: String) throws {
+        let h = try requireHandle()
+        let normalized = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw RustProxyError.internalState("client allowlist IP must not be empty")
+        }
+        let result = normalized.withCString { crab_proxy_client_allowlist_add_ip(h, $0) }
+        try Self.check(result)
+    }
+
     func setTransparentEnabled(_ enabled: Bool) throws {
         let h = try requireHandle()
         let result = crab_proxy_set_transparent_enabled(h, enabled)

@@ -1,6 +1,7 @@
 import Combine
 import CFNetwork
 import Foundation
+import Network
 
 private enum ProxyViewModelError: Error, LocalizedError {
   case invalidValue(String)
@@ -80,7 +81,27 @@ final class ProxyViewModel: ObservableObject {
   }
 
   let certPortalURL = "http://crab-proxy.local/"
-  let listenAddress = "0.0.0.0:8888"
+  private let listenPort: UInt16 = 8888
+  @Published var allowLANConnections = true {
+    didSet {
+      applyAllowLANConnectionsIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published var lanClientAllowlist: [String] = [] {
+    didSet {
+      let normalized = Self.normalizedLANClientAllowlist(lanClientAllowlist)
+      if lanClientAllowlist != normalized {
+        lanClientAllowlist = normalized
+        return
+      }
+      applyLANClientAllowlistIfRunning(oldValue: oldValue)
+    }
+  }
+  @Published private(set) var pendingLANAccessRequestIP: String?
+  var listenAddress: String {
+    let host = allowLANConnections ? "0.0.0.0" : "127.0.0.1"
+    return "\(host):\(listenPort)"
+  }
   @Published private(set) var caCertPath = ""
   @Published private(set) var caStatusText = "Preparing internal CA"
   @Published var inspectBodies = true {
@@ -173,6 +194,9 @@ final class ProxyViewModel: ObservableObject {
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
   private static let mapLocalRulesDefaultsKey = "CrabProxyMacApp.mapLocalRules.v1"
   private static let statusRewriteRulesDefaultsKey = "CrabProxyMacApp.statusRewriteRules.v1"
+  private static let allowLANConnectionsDefaultsKey = "CrabProxyMacApp.network.allowLANConnections.v1"
+  private static let lanClientAllowlistDefaultsKey =
+    "CrabProxyMacApp.network.lanClientAllowlist.v1"
   private static let throttleEnabledDefaultsKey = "CrabProxyMacApp.throttle.enabled.v1"
   private static let throttleLatencyMsDefaultsKey = "CrabProxyMacApp.throttle.latencyMs.v1"
   private static let throttleDownstreamKbpsDefaultsKey = "CrabProxyMacApp.throttle.downstreamKbps.v1"
@@ -185,6 +209,8 @@ final class ProxyViewModel: ObservableObject {
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
   private let transparentProxyPort: UInt16 = 8889
+  private let clientAppResolutionBatchSize = 24
+  private let maxClientAppResolutionAttempts = 2
   private static let replayExcludedHeaders: Set<String> = [
     "connection",
     "content-length",
@@ -200,10 +226,17 @@ final class ProxyViewModel: ObservableObject {
   private let caCertService: any CACertServicing
   private let pfService: any PFServicing
   private let systemProxyService: any MacSystemProxyServicing
+  private let clientAppResolver = LocalClientAppResolver(listenPort: 8888)
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
+  private var pendingClientAppResolutionIDs: Set<ProxyLogEntry.ID> = []
+  private var clientAppResolutionAttempts: [ProxyLogEntry.ID: Int] = [:]
   private var logFlushTask: Task<Void, Never>?
+  private var listenAddressApplyTask: Task<Void, Never>?
+  private var lanClientAllowlistApplyTask: Task<Void, Never>?
   private var inspectBodiesApplyTask: Task<Void, Never>?
   private var throttleApplyTask: Task<Void, Never>?
+  private var pendingLANAccessQueue: [String] = []
+  private var dismissedLANAccessIPs: Set<String> = []
   private var cancellables: Set<AnyCancellable> = []
 
   init(
@@ -217,6 +250,8 @@ final class ProxyViewModel: ObservableObject {
     allowRules = Self.loadAllowRules()
     mapLocalRules = Self.loadMapLocalRules()
     statusRewriteRules = Self.loadStatusRewriteRules()
+    allowLANConnections = Self.loadAllowLANConnections()
+    lanClientAllowlist = Self.loadLANClientAllowlist()
     throttleEnabled = Self.loadThrottleEnabled()
     throttleLatencyMs = Self.loadThrottleLatencyMs()
     throttleDownstreamKbps = Self.loadThrottleDownstreamKbps()
@@ -239,6 +274,8 @@ final class ProxyViewModel: ObservableObject {
 
   deinit {
     logFlushTask?.cancel()
+    listenAddressApplyTask?.cancel()
+    lanClientAllowlistApplyTask?.cancel()
     inspectBodiesApplyTask?.cancel()
     throttleApplyTask?.cancel()
   }
@@ -279,7 +316,10 @@ final class ProxyViewModel: ObservableObject {
 
   var mobileProxyEndpoint: String? {
     let listen = parsedListen
-    if isLoopbackHost(listen.host) || isAllInterfacesHost(listen.host) {
+    if isLoopbackHost(listen.host) {
+      return nil
+    }
+    if isAllInterfacesHost(listen.host) {
       guard let lanIP = preferredLANIPv4Address() else {
         return nil
       }
@@ -291,12 +331,67 @@ final class ProxyViewModel: ObservableObject {
   var mobileListenGuide: String {
     let listen = parsedListen
     if isLoopbackHost(listen.host) {
-      return "For iOS/Android, change Listen to 0.0.0.0:\(listen.port) and use Mac LAN IP below."
+      return "Enable Allow LAN connections to use this Mac from iOS/Android."
     }
     if isAllInterfacesHost(listen.host) {
+      if preferredLANIPv4Address() == nil {
+        return "No LAN IPv4 found. Check Wi-Fi/LAN connection."
+      }
       return "Use the Mac LAN IP below as proxy server on phone."
     }
     return "Phone proxy server should match this host:port."
+  }
+
+  func addLANClientAllowlistIP(_ rawIP: String) {
+    guard let normalized = Self.normalizedIPAddress(rawIP) else {
+      statusText = "Invalid IP address. Enter IPv4 or IPv6."
+      return
+    }
+    if lanClientAllowlist.contains(normalized) {
+      statusText = "IP already allowed: \(normalized)"
+      return
+    }
+    lanClientAllowlist.append(normalized)
+    dismissedLANAccessIPs.remove(normalized)
+    statusText = "Allowed LAN IP added: \(normalized)"
+  }
+
+  func removeLANClientAllowlistIP(_ ip: String) {
+    let normalized = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return }
+    let before = lanClientAllowlist.count
+    lanClientAllowlist.removeAll { $0.caseInsensitiveCompare(normalized) == .orderedSame }
+    if lanClientAllowlist.count != before {
+      statusText = "Allowed LAN IP removed: \(normalized)"
+    }
+  }
+
+  func approvePendingLANAccessRequest() {
+    guard let ip = pendingLANAccessRequestIP else { return }
+    pendingLANAccessRequestIP = nil
+    dismissedLANAccessIPs.remove(ip)
+    if lanClientAllowlist.contains(ip) {
+      statusText = "LAN device already allowed: \(ip)"
+    } else {
+      lanClientAllowlist.append(ip)
+      statusText = "LAN access allowed: \(ip)"
+    }
+    advancePendingLANAccessPromptIfNeeded()
+  }
+
+  func denyPendingLANAccessRequest() {
+    guard let ip = pendingLANAccessRequestIP else { return }
+    pendingLANAccessRequestIP = nil
+    dismissedLANAccessIPs.insert(ip)
+    statusText = "LAN access denied: \(ip)"
+    advancePendingLANAccessPromptIfNeeded()
+  }
+
+  func dismissPendingLANAccessRequest() {
+    guard let ip = pendingLANAccessRequestIP else { return }
+    pendingLANAccessRequestIP = nil
+    dismissedLANAccessIPs.insert(ip)
+    advancePendingLANAccessPromptIfNeeded()
   }
 
   func startProxy() {
@@ -307,6 +402,7 @@ final class ProxyViewModel: ObservableObject {
 
     do {
       try engine.setListenAddress(listenAddress)
+      try applyLANAccessConfig(to: engine)
       try engine.setInspectEnabled(inspectBodies)
       try applyThrottleConfig(to: engine)
       if transparentProxyEnabled {
@@ -358,6 +454,8 @@ final class ProxyViewModel: ObservableObject {
     logFlushTask?.cancel()
     logFlushTask = nil
     pendingLogEvents.removeAll(keepingCapacity: true)
+    pendingClientAppResolutionIDs.removeAll(keepingCapacity: true)
+    clientAppResolutionAttempts.removeAll(keepingCapacity: true)
     logs = logStore.clear()
     filteredLogs.removeAll(keepingCapacity: true)
     selectedLogID = nil
@@ -817,6 +915,7 @@ final class ProxyViewModel: ObservableObject {
 
     if runtimeWasRunning {
       try activeEngine.setListenAddress(listenAddress)
+      try applyLANAccessConfig(to: activeEngine)
       try activeEngine.setInspectEnabled(inspectBodies)
       try applyThrottleConfig(to: activeEngine)
       if transparentProxyEnabled {
@@ -881,6 +980,14 @@ final class ProxyViewModel: ObservableObject {
     try engine.clearThrottleSelectedHosts()
     for matcher in throttleSelectedHosts {
       try engine.addThrottleSelectedHost(matcher)
+    }
+  }
+
+  private func applyLANAccessConfig(to engine: RustProxyEngine) throws {
+    try engine.setClientAllowlistEnabled(allowLANConnections)
+    try engine.clearClientAllowlist()
+    for ip in lanClientAllowlist {
+      try engine.addClientAllowlistIP(ip)
     }
   }
 
@@ -1186,7 +1293,8 @@ final class ProxyViewModel: ObservableObject {
   private func parseListenAddress() -> (host: String, port: UInt16) {
     let raw = trimmed(listenAddress)
     guard !raw.isEmpty else {
-      return ("0.0.0.0", 8888)
+      let host = allowLANConnections ? "0.0.0.0" : "127.0.0.1"
+      return (host, listenPort)
     }
 
     if let bracketClose = raw.firstIndex(of: "]"),
@@ -1201,7 +1309,7 @@ final class ProxyViewModel: ObservableObject {
           return (host, port)
         }
       }
-      return (host, 8888)
+      return (host, listenPort)
     }
 
     if let colon = raw.lastIndex(of: ":"), colon < raw.endIndex {
@@ -1212,7 +1320,7 @@ final class ProxyViewModel: ObservableObject {
       }
     }
 
-    return (raw, 8888)
+    return (raw, listenPort)
   }
 
   private func isLoopbackHost(_ host: String) -> Bool {
@@ -1235,8 +1343,82 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func appendLog(level: UInt8, message: String) {
+    handleLANAccessRequestLog(message)
     pendingLogEvents.append((level, message))
     scheduleLogFlushIfNeeded()
+  }
+
+  private func handleLANAccessRequestLog(_ message: String) {
+    guard let rawIP = Self.firstCapture(Self.lanAccessRequestRegex, in: message) else { return }
+    guard let ip = Self.normalizedIPAddress(rawIP) else { return }
+    if lanClientAllowlist.contains(ip) {
+      return
+    }
+    if dismissedLANAccessIPs.contains(ip) {
+      return
+    }
+    enqueueLANAccessPrompt(ip)
+  }
+
+  private func enqueueLANAccessPrompt(_ ip: String) {
+    if pendingLANAccessRequestIP == ip {
+      return
+    }
+    if pendingLANAccessQueue.contains(ip) {
+      return
+    }
+    guard pendingLANAccessRequestIP != nil else {
+      pendingLANAccessRequestIP = ip
+      return
+    }
+    pendingLANAccessQueue.append(ip)
+  }
+
+  private func advancePendingLANAccessPromptIfNeeded() {
+    if let next = pendingLANAccessQueue.first {
+      pendingLANAccessQueue.removeFirst()
+      pendingLANAccessRequestIP = next
+      return
+    }
+    pendingLANAccessRequestIP = nil
+  }
+
+  private func applyAllowLANConnectionsIfRunning(oldValue: Bool) {
+    guard oldValue != allowLANConnections else { return }
+    guard isRunning else { return }
+    listenAddressApplyTask?.cancel()
+
+    listenAddressApplyTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self else { return }
+      guard !Task.isCancelled else { return }
+      guard self.isRunning else { return }
+
+      self.stopProxy()
+      guard !Task.isCancelled else { return }
+      guard !self.isRunning else { return }
+
+      self.startProxy()
+    }
+  }
+
+  private func applyLANClientAllowlistIfRunning(oldValue: [String]) {
+    guard oldValue != lanClientAllowlist else { return }
+    guard isRunning else { return }
+    lanClientAllowlistApplyTask?.cancel()
+
+    lanClientAllowlistApplyTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self else { return }
+      guard !Task.isCancelled else { return }
+      guard self.isRunning else { return }
+
+      self.stopProxy()
+      guard !Task.isCancelled else { return }
+      guard !self.isRunning else { return }
+
+      self.startProxy()
+    }
   }
 
   private func applyInspectBodiesIfRunning(oldValue: Bool) {
@@ -1343,6 +1525,46 @@ final class ProxyViewModel: ObservableObject {
     if selectedLogID != snapshot.selectedLogID {
       selectedLogID = snapshot.selectedLogID
     }
+    scheduleClientAppResolution()
+  }
+
+  private func scheduleClientAppResolution() {
+    pruneClientAppResolutionState()
+    let candidates = logStore.unresolvedClientAppEntries(limit: clientAppResolutionBatchSize)
+    guard !candidates.isEmpty else { return }
+
+    for candidate in candidates {
+      guard !pendingClientAppResolutionIDs.contains(candidate.id) else { continue }
+      let attempts = clientAppResolutionAttempts[candidate.id] ?? 0
+      guard attempts < maxClientAppResolutionAttempts else { continue }
+
+      pendingClientAppResolutionIDs.insert(candidate.id)
+      clientAppResolutionAttempts[candidate.id] = attempts + 1
+
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        let app = await self.clientAppResolver.resolveClientApp(
+          peer: candidate.peer,
+          platformHint: candidate.clientPlatform
+        )
+        self.pendingClientAppResolutionIDs.remove(candidate.id)
+        if let app, let snapshot = self.logStore.setClientApp(app, forLogID: candidate.id) {
+          self.logs = snapshot
+          self.rebuildFilteredLogs()
+        } else if (self.clientAppResolutionAttempts[candidate.id] ?? 0) < self.maxClientAppResolutionAttempts {
+          Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            self?.scheduleClientAppResolution()
+          }
+        }
+      }
+    }
+  }
+
+  private func pruneClientAppResolutionState() {
+    let liveIDs = Set(logs.map(\.id))
+    pendingClientAppResolutionIDs = pendingClientAppResolutionIDs.filter { liveIDs.contains($0) }
+    clientAppResolutionAttempts = clientAppResolutionAttempts.filter { liveIDs.contains($0.key) }
   }
 
   private func rebuildFilteredLogs() {
@@ -1392,6 +1614,20 @@ final class ProxyViewModel: ObservableObject {
       .dropFirst()
       .sink { [weak self] _ in
         self?.persistStatusRewriteRules()
+      }
+      .store(in: &cancellables)
+
+    $allowLANConnections
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistListenSettings()
+      }
+      .store(in: &cancellables)
+
+    $lanClientAllowlist
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.persistListenSettings()
       }
       .store(in: &cancellables)
 
@@ -1544,6 +1780,18 @@ final class ProxyViewModel: ObservableObject {
     return authorityAndMaybePath
   }
 
+  private func persistListenSettings() {
+    let defaults = UserDefaults.standard
+    defaults.set(
+      allowLANConnections,
+      forKey: Self.allowLANConnectionsDefaultsKey
+    )
+    defaults.set(
+      Self.normalizedLANClientAllowlist(lanClientAllowlist),
+      forKey: Self.lanClientAllowlistDefaultsKey
+    )
+  }
+
   private func persistAllowRules() {
     let values = ruleManager.normalizedAllowMatchers(from: allowRules)
     UserDefaults.standard.set(values, forKey: Self.allowRulesDefaultsKey)
@@ -1616,6 +1864,20 @@ final class ProxyViewModel: ObservableObject {
     }
 
     return saved.map { AllowRuleInput(matcher: $0) }
+  }
+
+  private static func loadAllowLANConnections() -> Bool {
+    let defaults = UserDefaults.standard
+    guard defaults.object(forKey: Self.allowLANConnectionsDefaultsKey) != nil else {
+      return true
+    }
+    return defaults.bool(forKey: Self.allowLANConnectionsDefaultsKey)
+  }
+
+  private static func loadLANClientAllowlist() -> [String] {
+    let defaults = UserDefaults.standard
+    let raw = defaults.stringArray(forKey: Self.lanClientAllowlistDefaultsKey) ?? []
+    return normalizedLANClientAllowlist(raw)
   }
 
   private static func loadMapLocalRules() -> [MapLocalRuleInput] {
@@ -1700,6 +1962,30 @@ final class ProxyViewModel: ObservableObject {
     return normalizedThrottleHosts(raw)
   }
 
+  private static func normalizedLANClientAllowlist(_ values: [String]) -> [String] {
+    var out: [String] = []
+    var seen: Set<String> = []
+    for raw in values {
+      guard let normalized = normalizedIPAddress(raw) else { continue }
+      let lowered = normalized.lowercased()
+      guard seen.insert(lowered).inserted else { continue }
+      out.append(normalized)
+    }
+    return out
+  }
+
+  private static func normalizedIPAddress(_ value: String) -> String? {
+    let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty else { return nil }
+    if let v4 = IPv4Address(raw) {
+      return v4.debugDescription
+    }
+    if let v6 = IPv6Address(raw) {
+      return v6.debugDescription.lowercased()
+    }
+    return nil
+  }
+
   private static func normalizedThrottleHosts(_ values: [String]) -> [String] {
     var out: [String] = []
     var seen: Set<String> = []
@@ -1711,6 +1997,18 @@ final class ProxyViewModel: ObservableObject {
       out.append(trimmed)
     }
     return out
+  }
+
+  private static let lanAccessRequestRegex = try! NSRegularExpression(
+    pattern: #"LAN_ACCESS_REQUEST ip=([^\s]+)"#
+  )
+
+  private static func firstCapture(_ regex: NSRegularExpression, in text: String) -> String? {
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    guard let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges > 1
+    else { return nil }
+    guard let captureRange = Range(match.range(at: 1), in: text) else { return nil }
+    return String(text[captureRange])
   }
 
   private static func normalizedNonNegativeInt(_ value: Int) -> Int {

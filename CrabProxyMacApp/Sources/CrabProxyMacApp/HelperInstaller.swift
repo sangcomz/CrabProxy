@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum HelperInstallerError: LocalizedError, Sendable {
   case binaryNotFound
@@ -22,6 +23,7 @@ enum HelperInstaller {
   static let helperToolPath = "/Library/PrivilegedHelperTools/\(helperLabel)"
   static let launchDaemonPlistPath = "/Library/LaunchDaemons/\(helperLabel).plist"
   private static let helperBinaryCandidates = [helperLabel, "CrabProxyHelper"]
+  private static let expectedHelperIdentifier = "com.sangcomz.CrabProxyHelper"
 
   static func install() throws {
     let binaryPath = try findHelperBinary()
@@ -65,10 +67,75 @@ enum HelperInstaller {
 
   // MARK: - Private
 
+  private struct CodeSigningIdentity {
+    let identifier: String
+    let teamIdentifier: String
+  }
+
+  private static func verifyHelperBinary(at path: String) -> Bool {
+    guard
+      let appIdentity = currentProcessIdentity(),
+      let helperIdentity = identityForBinary(at: path)
+    else {
+      return false
+    }
+
+    return helperIdentity.identifier == expectedHelperIdentifier
+      && helperIdentity.teamIdentifier == appIdentity.teamIdentifier
+  }
+
+  private static func currentProcessIdentity() -> CodeSigningIdentity? {
+    var code: SecCode?
+    guard SecCodeCopySelf(SecCSFlags(), &code) == errSecSuccess, let selfCode = code else {
+      return nil
+    }
+
+    var staticCode: SecStaticCode?
+    guard
+      SecCodeCopyStaticCode(selfCode, SecCSFlags(), &staticCode) == errSecSuccess,
+      let selfStaticCode = staticCode
+    else {
+      return nil
+    }
+
+    return signingIdentity(from: selfStaticCode)
+  }
+
+  private static func identityForBinary(at path: String) -> CodeSigningIdentity? {
+    let url = URL(fileURLWithPath: path)
+    var staticCode: SecStaticCode?
+    guard
+      SecStaticCodeCreateWithPath(url as CFURL, SecCSFlags(), &staticCode) == errSecSuccess,
+      let binaryStaticCode = staticCode
+    else {
+      return nil
+    }
+
+    return signingIdentity(from: binaryStaticCode)
+  }
+
+  private static func signingIdentity(from staticCode: SecStaticCode) -> CodeSigningIdentity? {
+    guard SecStaticCodeCheckValidity(staticCode, SecCSFlags(), nil) == errSecSuccess else {
+      return nil
+    }
+    var info: CFDictionary?
+    guard
+      SecCodeCopySigningInformation(staticCode, SecCSFlags(), &info) == errSecSuccess,
+      let signingInfo = info as? [String: Any],
+      let identifier = signingInfo[kSecCodeInfoIdentifier as String] as? String,
+      let teamIdentifier = signingInfo[kSecCodeInfoTeamIdentifier as String] as? String
+    else {
+      return nil
+    }
+
+    return CodeSigningIdentity(identifier: identifier, teamIdentifier: teamIdentifier)
+  }
+
   private static func findHelperBinary() throws -> String {
     // 1. Check inside the app bundle Resources
     for candidate in helperBinaryCandidates {
-      if let bundlePath = Bundle.main.path(forResource: candidate, ofType: nil) {
+      if let bundlePath = Bundle.main.path(forResource: candidate, ofType: nil),
+         verifyHelperBinary(at: bundlePath) {
         return bundlePath
       }
     }
@@ -78,7 +145,8 @@ enum HelperInstaller {
       let parentDir = execURL.deletingLastPathComponent()
       for candidate in helperBinaryCandidates {
         let siblingPath = parentDir.appendingPathComponent(candidate).path
-        if FileManager.default.fileExists(atPath: siblingPath) {
+        if FileManager.default.fileExists(atPath: siblingPath),
+           verifyHelperBinary(at: siblingPath) {
           return siblingPath
         }
       }
@@ -91,7 +159,8 @@ enum HelperInstaller {
       for _ in 0..<7 {
         for candidate in helperBinaryCandidates {
           let candidatePath = dir.appendingPathComponent(candidate).path
-          if FileManager.default.fileExists(atPath: candidatePath) {
+          if FileManager.default.fileExists(atPath: candidatePath),
+             verifyHelperBinary(at: candidatePath) {
             return candidatePath
           }
         }

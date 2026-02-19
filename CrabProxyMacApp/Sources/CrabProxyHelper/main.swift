@@ -1,15 +1,96 @@
 import Foundation
+import Security
 
 final class HelperDelegate: NSObject, NSXPCListenerDelegate, CrabProxyHelperProtocol {
+  private let expectedClientIdentifier = "com.sangcomz.CrabProxyMacApp"
 
   func listener(
     _ listener: NSXPCListener,
     shouldAcceptNewConnection newConnection: NSXPCConnection
   ) -> Bool {
+    guard isValidClient(pid: newConnection.processIdentifier) else {
+      return false
+    }
     newConnection.exportedInterface = NSXPCInterface(with: CrabProxyHelperProtocol.self)
     newConnection.exportedObject = self
     newConnection.resume()
     return true
+  }
+
+  private struct CodeSigningIdentity {
+    let identifier: String
+    let teamIdentifier: String
+  }
+
+  private func isValidClient(pid: pid_t) -> Bool {
+    guard
+      let helperIdentity = currentProcessIdentity(),
+      let clientIdentity = guestProcessIdentity(pid: pid)
+    else {
+      return false
+    }
+
+    return clientIdentity.identifier == expectedClientIdentifier
+      && clientIdentity.teamIdentifier == helperIdentity.teamIdentifier
+  }
+
+  private func currentProcessIdentity() -> CodeSigningIdentity? {
+    var code: SecCode?
+    guard SecCodeCopySelf(SecCSFlags(), &code) == errSecSuccess, let selfCode = code else {
+      return nil
+    }
+
+    var staticCode: SecStaticCode?
+    guard
+      SecCodeCopyStaticCode(selfCode, SecCSFlags(), &staticCode) == errSecSuccess,
+      let selfStaticCode = staticCode
+    else {
+      return nil
+    }
+
+    return signingIdentity(from: selfStaticCode)
+  }
+
+  private func guestProcessIdentity(pid: pid_t) -> CodeSigningIdentity? {
+    var code: SecCode?
+    let attributes = [kSecGuestAttributePid: pid] as NSDictionary as CFDictionary
+    guard
+      SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code) == errSecSuccess,
+      let guestCode = code
+    else {
+      return nil
+    }
+
+    guard SecCodeCheckValidity(guestCode, SecCSFlags(), nil) == errSecSuccess else {
+      return nil
+    }
+
+    var staticCode: SecStaticCode?
+    guard
+      SecCodeCopyStaticCode(guestCode, SecCSFlags(), &staticCode) == errSecSuccess,
+      let guestStaticCode = staticCode
+    else {
+      return nil
+    }
+
+    return signingIdentity(from: guestStaticCode)
+  }
+
+  private func signingIdentity(from staticCode: SecStaticCode) -> CodeSigningIdentity? {
+    guard SecStaticCodeCheckValidity(staticCode, SecCSFlags(), nil) == errSecSuccess else {
+      return nil
+    }
+    var info: CFDictionary?
+    guard
+      SecCodeCopySigningInformation(staticCode, SecCSFlags(), &info) == errSecSuccess,
+      let signingInfo = info as? [String: Any],
+      let identifier = signingInfo[kSecCodeInfoIdentifier as String] as? String,
+      let teamIdentifier = signingInfo[kSecCodeInfoTeamIdentifier as String] as? String
+    else {
+      return nil
+    }
+
+    return CodeSigningIdentity(identifier: identifier, teamIdentifier: teamIdentifier)
   }
 
   // MARK: - CrabProxyHelperProtocol

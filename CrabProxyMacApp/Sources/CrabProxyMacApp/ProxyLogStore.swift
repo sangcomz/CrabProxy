@@ -18,6 +18,7 @@ struct ProxyLogEntry: Identifiable, Hashable {
     let peer: String?
     let mapLocalMatcher: String?
     var clientPlatform: ClientPlatform?
+    var clientApp: String?
     let durationMs: Double?
     var responseSizeBytes: Int64?
     var requestHeaders: String?
@@ -34,6 +35,7 @@ private struct PendingTransactionMeta {
     var responseBodyPreview: String?
     var responseSizeBytes: Int64?
     var clientPlatform: ClientPlatform?
+    var clientApp: String?
 
     var isEmpty: Bool {
         requestHeaders == nil
@@ -42,6 +44,7 @@ private struct PendingTransactionMeta {
             && responseBodyPreview == nil
             && responseSizeBytes == nil
             && clientPlatform == nil
+            && clientApp == nil
     }
 
     mutating func merge(_ other: PendingTransactionMeta) {
@@ -51,7 +54,14 @@ private struct PendingTransactionMeta {
         if let value = other.responseBodyPreview { responseBodyPreview = value }
         if let value = other.responseSizeBytes { responseSizeBytes = value }
         if let value = other.clientPlatform { clientPlatform = value }
+        if let value = other.clientApp { clientApp = value }
     }
+}
+
+struct ClientAppResolutionCandidate: Hashable {
+    let id: UUID
+    let peer: String
+    let clientPlatform: ClientPlatform?
 }
 
 @MainActor
@@ -77,6 +87,40 @@ final class ProxyLogStore {
     func selectedLog(id: ProxyLogEntry.ID?) -> ProxyLogEntry? {
         guard let id, let index = logIndexByID[id], logs.indices.contains(index) else { return nil }
         return logs[index]
+    }
+
+    func unresolvedClientAppEntries(limit: Int) -> [ClientAppResolutionCandidate] {
+        guard limit > 0 else { return [] }
+        var out: [ClientAppResolutionCandidate] = []
+        out.reserveCapacity(limit)
+
+        for entry in logs.reversed() {
+            guard entry.clientApp == nil, let peer = entry.peer else { continue }
+            out.append(
+                ClientAppResolutionCandidate(
+                    id: entry.id,
+                    peer: peer,
+                    clientPlatform: entry.clientPlatform
+                )
+            )
+            if out.count >= limit {
+                break
+            }
+        }
+
+        return out
+    }
+
+    @discardableResult
+    func setClientApp(_ clientApp: String, forLogID id: ProxyLogEntry.ID) -> [ProxyLogEntry]? {
+        let normalized = trimmed(clientApp)
+        guard !normalized.isEmpty else { return nil }
+        guard let index = logIndexByID[id], logs.indices.contains(index) else { return nil }
+        if logs[index].clientApp == normalized {
+            return nil
+        }
+        logs[index].clientApp = normalized
+        return logs
     }
 
     func append(level: UInt8, message: String, currentSelectedLogID: ProxyLogEntry.ID?) -> (logs: [ProxyLogEntry], selectedLogID: ProxyLogEntry.ID?)? {
@@ -190,6 +234,7 @@ final class ProxyLogStore {
             let peer = stringField("peer", in: object)
             let mapLocal = stringField("map_local", in: object)
             let clientPlatform = inferClientPlatform(requestHeaders: nil, peer: peer)
+            let clientApp = inferClientApp(peer: peer, clientPlatform: clientPlatform)
             let durationMs = doubleField("duration_ms", in: object)
             let responseSizeBytes = int64Field("response_size_bytes", in: object)
             let requestID = stringField("request_id", in: object)
@@ -213,6 +258,7 @@ final class ProxyLogStore {
                     peer: peer,
                     mapLocalMatcher: mapLocal,
                     clientPlatform: clientPlatform,
+                    clientApp: clientApp,
                     durationMs: durationMs,
                     responseSizeBytes: responseSizeBytes,
                     requestHeaders: nil,
@@ -245,11 +291,13 @@ final class ProxyLogStore {
                 let headersB64 = stringField("headers_b64", in: object) ?? ""
                 let decoded = decodeHeaderPreview(headersB64) ?? "<failed to decode headers>"
                 let clientPlatform = inferClientPlatform(requestHeaders: decoded, peer: peer)
+                let clientApp = inferClientApp(peer: peer, clientPlatform: clientPlatform)
                 return .metadata(
                     key: key,
                     meta: PendingTransactionMeta(
                         requestHeaders: decoded,
-                        clientPlatform: clientPlatform
+                        clientPlatform: clientPlatform,
+                        clientApp: clientApp
                     )
                 )
             case "response_headers":
@@ -334,6 +382,17 @@ final class ProxyLogStore {
         }
         if isLikelyLANHost(host) {
             return .mobile
+        }
+        return nil
+    }
+
+    private func inferClientApp(peer: String?, clientPlatform: ClientPlatform?) -> String? {
+        guard let host = hostFromPeer(peer) else { return nil }
+        if isLoopbackHost(host) {
+            return nil
+        }
+        if clientPlatform == .mobile || isLikelyLANHost(host) {
+            return "LAN \(host)"
         }
         return nil
     }
@@ -439,6 +498,7 @@ final class ProxyLogStore {
             ?? Self.firstCapture(Self.responseStatusRegex, in: line)
         let peer = Self.firstCapture(Self.peerRegex, in: line)
         let clientPlatform = inferClientPlatform(requestHeaders: nil, peer: peer)
+        let clientApp = inferClientApp(peer: peer, clientPlatform: clientPlatform)
         let requestID = Self.firstCapture(Self.requestIDRegex, in: line)
         let mapLocal = Self.firstCapture(Self.mapLocalRegex, in: line)
 
@@ -455,6 +515,7 @@ final class ProxyLogStore {
             peer: peer,
             mapLocalMatcher: mapLocal,
             clientPlatform: clientPlatform,
+            clientApp: clientApp,
             durationMs: nil,
             responseSizeBytes: nil,
             requestHeaders: nil,
@@ -558,6 +619,7 @@ final class ProxyLogStore {
         if let value = meta.responseBodyPreview { entry.responseBodyPreview = value }
         if let value = meta.responseSizeBytes { entry.responseSizeBytes = value }
         if let value = meta.clientPlatform { entry.clientPlatform = value }
+        if let value = meta.clientApp { entry.clientApp = value }
     }
 
     private func decodeBase64Text(_ value: String) -> String? {

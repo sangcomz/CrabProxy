@@ -1488,6 +1488,7 @@ private struct StatusRewriteRuleEditorSheet: View {
 struct DeviceSetupView: View {
     @ObservedObject var model: ProxyViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @State private var newAllowlistIP = ""
 
     var body: some View {
         ScrollView {
@@ -1506,6 +1507,21 @@ struct DeviceSetupView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .alert(
+            "Allow LAN Device?",
+            isPresented: lanApprovalAlertPresented
+        ) {
+            Button("Deny", role: .destructive) {
+                model.denyPendingLANAccessRequest()
+            }
+            Button("Allow") {
+                model.approvePendingLANAccessRequest()
+            }
+        } message: {
+            Text(
+                "IP \(model.pendingLANAccessRequestIP ?? "-") requested proxy access. Add this IP to allowlist?"
+            )
+        }
     }
 
     private var proxySection: some View {
@@ -1518,16 +1534,88 @@ struct DeviceSetupView: View {
                 .font(.custom("Avenir Next Medium", size: 12))
                 .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
 
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Allow LAN connections")
+                        .font(.custom("Avenir Next Demi Bold", size: 13))
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                    Text("When enabled, mobile devices on the same network can connect.")
+                        .font(.custom("Avenir Next Medium", size: 11))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                }
+                Spacer(minLength: 0)
+                Toggle("", isOn: $model.allowLANConnections)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Allowed Device IPs")
+                    .font(.custom("Avenir Next Demi Bold", size: 13))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                Text("Unknown LAN IPs are blocked first, then shown as approval popup.")
+                    .font(.custom("Avenir Next Medium", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                if model.lanClientAllowlist.isEmpty {
+                    Text("No allowed IP yet.")
+                        .font(.custom("Avenir Next Medium", size: 11))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.lanClientAllowlist, id: \.self) { ip in
+                            HStack(spacing: 8) {
+                                Text(ip)
+                                    .font(.custom("Avenir Next Medium", size: 12))
+                                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                                    .textSelection(.enabled)
+                                Spacer(minLength: 0)
+                                Button(role: .destructive) {
+                                    model.removeLANClientAllowlistIP(ip)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TextField("e.g. 192.168.0.23", text: $newAllowlistIP)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Add") {
+                        model.addLANClientAllowlistIP(newAllowlistIP)
+                        newAllowlistIP = ""
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
             if let endpoint = model.mobileProxyEndpoint {
                 CopyValueRow(title: "Use on iOS/Android", value: endpoint)
             } else {
-                Text("No LAN IPv4 found. Check Wi-Fi/LAN connection.")
+                Text(model.mobileListenGuide)
                     .font(.custom("Avenir Next Medium", size: 12))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
             }
         }
         .padding(14)
         .background(GlassCard())
+    }
+
+    private var lanApprovalAlertPresented: Binding<Bool> {
+        Binding(
+            get: {
+                model.pendingLANAccessRequestIP != nil
+            },
+            set: { visible in
+                if !visible {
+                    model.dismissPendingLANAccessRequest()
+                }
+            }
+        )
     }
 
     private var certPortalSection: some View {

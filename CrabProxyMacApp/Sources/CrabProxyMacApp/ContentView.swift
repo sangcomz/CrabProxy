@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
+    private enum TrafficScope: Equatable {
+        case all
+        case domain(String)
+        case app(String)
+    }
+
     @ObservedObject var model: ProxyViewModel
     @Binding var appearanceModeRawValue: String
     @AppStorage("CrabProxyMacApp.currentScreen") private var currentScreenRawValue = MainScreen.traffic.rawValue
@@ -11,8 +17,11 @@ struct ContentView: View {
     @State private var detailTab: DetailTab = .summary
     @State private var isTrafficListAtTop = true
     @State private var selectedDomain: String?
+    @State private var selectedClientApp: String?
+    @State private var activeTrafficScope: TrafficScope = .all
     @State private var pinnedDomains: Set<String> = []
     @State private var pinnedSectionExpanded = true
+    @State private var appsSectionExpanded = true
     @State private var domainsSectionExpanded = true
     @State private var selectedClientFilter: ClientLabelFilter = .all
     @FocusState private var isFilterFieldFocused: Bool
@@ -44,6 +53,17 @@ struct ContentView: View {
         .onChange(of: groupedDomains.map(\.domain)) { _, domains in
             if let selectedDomain, !domains.contains(selectedDomain) {
                 self.selectedDomain = nil
+                if case .domain = activeTrafficScope {
+                    activeTrafficScope = .all
+                }
+            }
+        }
+        .onChange(of: groupedClientApps.map(\.label)) { _, labels in
+            if let selectedClientApp, !labels.contains(selectedClientApp) {
+                self.selectedClientApp = nil
+                if case .app = activeTrafficScope {
+                    activeTrafficScope = .all
+                }
             }
         }
         .onChange(of: pinnedDomains) { _, domains in
@@ -93,18 +113,45 @@ struct ContentView: View {
         MainScreen(rawValue: currentScreenRawValue) ?? .traffic
     }
 
-    private var scopedLogs: [ProxyLogEntry] {
+    private var platformScopedLogs: [ProxyLogEntry] {
         model.filteredLogs.filter { entry in
             selectedClientFilter.matches(entry.clientPlatform)
         }
     }
 
+    private var scopedLogs: [ProxyLogEntry] {
+        switch activeTrafficScope {
+        case .all:
+            return platformScopedLogs
+        case .domain(let domain):
+            return filteredLogs(forDomain: domain, in: platformScopedLogs)
+        case .app(let app):
+            return platformScopedLogs.filter { canonicalClientAppLabel($0.clientApp) == app }
+        }
+    }
+
     private var displayedTrafficLogs: [ProxyLogEntry] {
-        Array(filteredLogs(forDomain: selectedDomain, in: scopedLogs).reversed())
+        Array(scopedLogs.reversed())
+    }
+
+    private var groupedClientApps: [ClientAppGroup] {
+        let grouped = Dictionary(grouping: platformScopedLogs) { entry in
+            canonicalClientAppLabel(entry.clientApp)
+        }
+        return grouped
+            .map { label, entries in
+                ClientAppGroup(label: label, count: entries.count)
+            }
+            .sorted {
+                if $0.count == $1.count {
+                    return $0.label < $1.label
+                }
+                return $0.count > $1.count
+            }
     }
 
     private var groupedDomains: [ProxyViewModel.DomainGroup] {
-        let grouped = Dictionary(grouping: scopedLogs) { entry in
+        let grouped = Dictionary(grouping: platformScopedLogs) { entry in
             domainName(from: entry.url)
         }
         return grouped
@@ -133,11 +180,11 @@ struct ContentView: View {
     }
 
     private var allDomainHasMacOS: Bool {
-        scopedLogs.contains { $0.clientPlatform == .macOS }
+        platformScopedLogs.contains { $0.clientPlatform == .macOS }
     }
 
     private var allDomainHasMobile: Bool {
-        scopedLogs.contains { $0.clientPlatform == .mobile }
+        platformScopedLogs.contains { $0.clientPlatform == .mobile }
     }
 
     @ViewBuilder
@@ -287,16 +334,22 @@ struct ContentView: View {
                 )
             clientFilterChips
 
-            List(selection: $selectedDomain) {
-                DomainRow(
-                    title: "All Traffic",
-                    count: scopedLogs.count,
-                    hasMacOS: allDomainHasMacOS,
-                    hasMobile: allDomainHasMobile,
-                    isSelected: selectedDomain == nil,
-                    isPinned: false
-                )
-                .tag(Optional<String>.none)
+            List {
+                Button {
+                    selectedDomain = nil
+                    selectedClientApp = nil
+                    activeTrafficScope = .all
+                } label: {
+                    DomainRow(
+                        title: "All Traffic",
+                        count: platformScopedLogs.count,
+                        hasMacOS: allDomainHasMacOS,
+                        hasMobile: allDomainHasMobile,
+                        isSelected: activeTrafficScope == .all,
+                        isPinned: false
+                    )
+                }
+                .buttonStyle(.plain)
                 .listRowBackground(Color.clear)
 
                 DisclosureGroup(isExpanded: $pinnedSectionExpanded) {
@@ -311,6 +364,25 @@ struct ContentView: View {
                 }
                 label: {
                     SidebarSectionLabel(title: "Pinned", symbol: "pin.fill", count: pinnedDomainGroups.count)
+                }
+                .listRowBackground(Color.clear)
+
+                DisclosureGroup(isExpanded: $appsSectionExpanded) {
+                    if groupedClientApps.isEmpty {
+                        SidebarHintRow(text: "No apps identified")
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(groupedClientApps) { group in
+                            appSelectionRow(
+                                title: group.label,
+                                count: group.count,
+                                appLabel: group.label
+                            )
+                        }
+                    }
+                }
+                label: {
+                    SidebarSectionLabel(title: "Apps", symbol: "app.fill", count: groupedClientApps.count)
                 }
                 .listRowBackground(Color.clear)
 
@@ -340,21 +412,44 @@ struct ContentView: View {
 
     @ViewBuilder
     private func domainSelectionRow(group: ProxyViewModel.DomainGroup, isPinned: Bool) -> some View {
-        DomainRow(
-            title: group.domain,
-            count: group.count,
-            hasMacOS: group.hasMacOS,
-            hasMobile: group.hasMobile,
-            isSelected: selectedDomain == group.domain,
-            isPinned: isPinned
-        )
-        .tag(Optional(group.domain))
+        Button {
+            selectedDomain = group.domain
+            selectedClientApp = nil
+            activeTrafficScope = .domain(group.domain)
+        } label: {
+            DomainRow(
+                title: group.domain,
+                count: group.count,
+                hasMacOS: group.hasMacOS,
+                hasMobile: group.hasMobile,
+                isSelected: activeTrafficScope == .domain(group.domain),
+                isPinned: isPinned
+            )
+        }
+        .buttonStyle(.plain)
         .listRowBackground(Color.clear)
         .contextMenu {
             Button(isPinned ? "Unpin Domain" : "Pin Domain") {
                 togglePin(for: group.domain)
             }
         }
+    }
+
+    @ViewBuilder
+    private func appSelectionRow(title: String, count: Int, appLabel: String) -> some View {
+        Button {
+            selectedClientApp = appLabel
+            selectedDomain = nil
+            activeTrafficScope = .app(appLabel)
+        } label: {
+            AppRow(
+                title: title,
+                count: count,
+                isSelected: activeTrafficScope == .app(appLabel)
+            )
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
     }
 
     private func togglePin(for domain: String) {
@@ -420,6 +515,41 @@ struct ContentView: View {
     private func filteredLogs(forDomain domain: String?, in entries: [ProxyLogEntry]) -> [ProxyLogEntry] {
         guard let domain else { return entries }
         return entries.filter { domainName(from: $0.url) == domain }
+    }
+
+    private func normalizedClientAppLabel(_ raw: String?) -> String {
+        if let raw {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return "Unknown App"
+    }
+
+    private func canonicalClientAppLabel(_ raw: String?) -> String {
+        let normalized = normalizedClientAppLabel(raw)
+        if normalized.hasPrefix("LAN ") || normalized == "Unknown App" {
+            return normalized
+        }
+
+        var value = normalized
+        if let range = value.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
+            value.removeSubrange(range)
+        }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        for suffix in [" Helper", "Helper", " Service"] {
+            if value.lowercased().hasSuffix(suffix.lowercased()) {
+                value = String(value.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        if value.caseInsensitiveCompare("Code") == .orderedSame {
+            return "Visual Studio Code"
+        }
+
+        return value.isEmpty ? normalized : value
     }
 
     private func domainName(from urlString: String) -> String {
@@ -577,6 +707,9 @@ struct ContentView: View {
             }
             if let matcher = entry.mapLocalMatcher {
                 DetailLine(title: "Map Local", value: matcher)
+            }
+            if let app = entry.clientApp {
+                DetailLine(title: "App", value: app)
             }
             if let platform = entry.clientPlatform {
                 DetailLine(title: "Client", value: platform.rawValue)
@@ -824,6 +957,139 @@ private enum ClientLabelFilter: String, CaseIterable, Identifiable {
     }
 }
 
+private struct ClientAppGroup: Identifiable, Hashable {
+    let label: String
+    let count: Int
+
+    var id: String { label }
+}
+
+private struct AppRow: View {
+    let title: String
+    let count: Int
+    let isSelected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var appIcon: NSImage {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("LAN ") {
+            return NSImage(systemSymbolName: "network", accessibilityDescription: nil)
+                ?? NSImage(systemSymbolName: "circle.grid.cross.fill", accessibilityDescription: nil)
+                ?? NSImage()
+        }
+        if trimmed.caseInsensitiveCompare("Unknown App") == .orderedSame {
+            return NSImage(systemSymbolName: "questionmark.app", accessibilityDescription: nil)
+                ?? NSImage(systemSymbolName: "circle.grid.cross.fill", accessibilityDescription: nil)
+                ?? NSImage()
+        }
+
+        let candidates = lookupCandidates(from: trimmed)
+        if let fromRunning = iconFromRunningApps(candidates) {
+            return fromRunning
+        }
+
+        return NSImage(systemSymbolName: "circle.grid.cross.fill", accessibilityDescription: nil) ?? NSImage()
+    }
+
+    private func iconFromRunningApps(_ candidates: [String]) -> NSImage? {
+        let running = NSWorkspace.shared.runningApplications
+        for candidate in candidates {
+            let needle = candidate.lowercased()
+            if needle.isEmpty { continue }
+
+            if let exact = running.first(where: {
+                guard let name = $0.localizedName else { return false }
+                return name.caseInsensitiveCompare(candidate) == .orderedSame
+            }), let icon = exact.icon?.copy() as? NSImage {
+                icon.size = NSSize(width: 14, height: 14)
+                return icon
+            }
+
+            if let fuzzy = running.first(where: {
+                guard let name = $0.localizedName?.lowercased() else { return false }
+                return name.contains(needle) || needle.contains(name)
+            }), let icon = fuzzy.icon?.copy() as? NSImage {
+                icon.size = NSSize(width: 14, height: 14)
+                return icon
+            }
+        }
+        return nil
+    }
+
+    private func lookupCandidates(from label: String) -> [String] {
+        var out: [String] = []
+
+        func push(_ value: String) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            if !out.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+                out.append(trimmed)
+            }
+        }
+
+        push(label)
+        var base = label
+        if let range = base.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) {
+            base.removeSubrange(range)
+        }
+        push(base)
+
+        for suffix in [" Helper", "Helper", " Service"] {
+            if base.lowercased().hasSuffix(suffix.lowercased()) {
+                base = String(base.dropLast(suffix.count))
+                push(base)
+            }
+        }
+
+        if base.caseInsensitiveCompare("Code") == .orderedSame {
+            push("Visual Studio Code")
+        }
+
+        return out
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(nsImage: appIcon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 14, height: 14)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+
+            Text(title)
+                .font(.custom("Avenir Next Demi Bold", size: 12))
+                .foregroundStyle(
+                    isSelected
+                        ? CrabTheme.primaryText(for: colorScheme)
+                        : CrabTheme.primaryText(for: colorScheme).opacity(0.86)
+                )
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text("\(count)")
+                .font(.custom("Menlo", size: 10))
+                .foregroundStyle(
+                    isSelected
+                        ? CrabTheme.primaryText(for: colorScheme).opacity(0.95)
+                        : CrabTheme.secondaryText(for: colorScheme)
+                )
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(
+                            isSelected
+                                ? CrabTheme.secondaryTint(for: colorScheme).opacity(0.2)
+                                : CrabTheme.softFill(for: colorScheme)
+                        )
+                )
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+}
+
 private struct TrafficListTopMarker: View {
     @Binding var isAtTop: Bool
 
@@ -856,12 +1122,16 @@ private struct ScrollToLatestButton: View {
                 Text("Top")
                     .font(.custom("Avenir Next Demi Bold", size: 11))
             }
-            .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+            .foregroundStyle(
+                CrabTheme.primaryText(for: colorScheme)
+            )
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
                 Capsule(style: .continuous)
-                    .fill(CrabTheme.softFill(for: colorScheme))
+                    .fill(
+                        CrabTheme.softFill(for: colorScheme)
+                    )
                     .overlay(
                         Capsule(style: .continuous)
                             .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
@@ -1049,6 +1319,12 @@ private struct TransactionRow: View {
                     Text(platform.rawValue)
                         .font(.custom("Avenir Next Demi Bold", size: 10))
                         .foregroundStyle(CrabTheme.secondaryText(for: colorScheme).opacity(0.9))
+                }
+                if let app = entry.clientApp {
+                    Text(app)
+                        .font(.custom("Avenir Next Demi Bold", size: 10))
+                        .foregroundStyle(CrabTheme.secondaryTint(for: colorScheme))
+                        .lineLimit(1)
                 }
                 if let durationText = formattedDuration(entry.durationMs) {
                     Text(durationText)
