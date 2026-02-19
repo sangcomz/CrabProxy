@@ -137,8 +137,9 @@ fi
 archives=()
 crabd_bins=()
 crabctl_bins=()
+crabmcp_bins=()
 for target in "${rust_targets[@]}"; do
-  build_cmd=(cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib --bin crabd --bin crabctl --target "$target")
+  build_cmd=(cargo build --manifest-path "$RUST_DIR/Cargo.toml" --lib --bin crabd --bin crabctl --bin crab-mcp --target "$target")
   if [[ "$PROFILE" == "release" ]]; then
     build_cmd+=(--release)
   fi
@@ -146,6 +147,7 @@ for target in "${rust_targets[@]}"; do
   archives+=("$RUST_DIR/target/$target/$PROFILE/libcrab_mitm.a")
   crabd_bins+=("$RUST_DIR/target/$target/$PROFILE/crabd")
   crabctl_bins+=("$RUST_DIR/target/$target/$PROFILE/crabctl")
+  crabmcp_bins+=("$RUST_DIR/target/$target/$PROFILE/crab-mcp")
 done
 
 OUTPUT_LIB="$RUST_DIR/target/$PROFILE/libcrab_mitm.a"
@@ -162,18 +164,23 @@ cp "$RUST_DIR/include/crab_mitm.h" "$APP_DIR/Sources/CCrabMitm/include/crab_mitm
 
 OUTPUT_CRABD="$RUST_DIR/target/$PROFILE/crabd"
 OUTPUT_CRABCTL="$RUST_DIR/target/$PROFILE/crabctl"
+OUTPUT_CRAB_MCP="$RUST_DIR/target/$PROFILE/crab-mcp"
 if [[ ${#crabd_bins[@]} -eq 1 ]]; then
   cp "${crabd_bins[0]}" "$OUTPUT_CRABD"
   cp "${crabctl_bins[0]}" "$OUTPUT_CRABCTL"
+  cp "${crabmcp_bins[0]}" "$OUTPUT_CRAB_MCP"
 else
   /usr/bin/lipo -create "${crabd_bins[@]}" -output "$OUTPUT_CRABD"
   /usr/bin/lipo -create "${crabctl_bins[@]}" -output "$OUTPUT_CRABCTL"
+  /usr/bin/lipo -create "${crabmcp_bins[@]}" -output "$OUTPUT_CRAB_MCP"
 fi
 
 echo "Rust daemon binary prepared at: $OUTPUT_CRABD"
 /usr/bin/lipo -info "$OUTPUT_CRABD" || true
 echo "Rust control binary prepared at: $OUTPUT_CRABCTL"
 /usr/bin/lipo -info "$OUTPUT_CRABCTL" || true
+echo "Rust MCP binary prepared at: $OUTPUT_CRAB_MCP"
+/usr/bin/lipo -info "$OUTPUT_CRAB_MCP" || true
 
 if [[ -n "${TARGET_BUILD_DIR:-}" && -n "${UNLOCALIZED_RESOURCES_FOLDER_PATH:-}" ]]; then
   resources_dir="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
@@ -181,14 +188,16 @@ if [[ -n "${TARGET_BUILD_DIR:-}" && -n "${UNLOCALIZED_RESOURCES_FOLDER_PATH:-}" 
 
   cp "$OUTPUT_CRABD" "$resources_dir/crabd"
   cp "$OUTPUT_CRABCTL" "$resources_dir/crabctl"
-  chmod 755 "$resources_dir/crabd" "$resources_dir/crabctl"
+  cp "$OUTPUT_CRAB_MCP" "$resources_dir/crab-mcp"
+  chmod 755 "$resources_dir/crabd" "$resources_dir/crabctl" "$resources_dir/crab-mcp"
 
   if command -v codesign >/dev/null 2>&1; then
     /usr/bin/codesign --force --sign - --timestamp=none --identifier "com.sangcomz.CrabProxy.crabd" "$resources_dir/crabd" || true
     /usr/bin/codesign --force --sign - --timestamp=none --identifier "com.sangcomz.crabctl" "$resources_dir/crabctl" || true
+    /usr/bin/codesign --force --sign - --timestamp=none --identifier "com.sangcomz.crab-mcp" "$resources_dir/crab-mcp" || true
   fi
 
-  echo "Packaged Rust binaries at: $resources_dir/crabd, $resources_dir/crabctl"
+  echo "Packaged Rust binaries at: $resources_dir/crabd, $resources_dir/crabctl, $resources_dir/crab-mcp"
 fi
 
 build_helper_resource_binary

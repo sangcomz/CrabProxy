@@ -8,6 +8,7 @@ struct CrabProxyMacApp: App {
     @AppStorage("CrabProxyMacApp.currentScreen") private var currentScreenRawValue = "traffic"
     @AppStorage("CrabProxyMacApp.settingsTab") private var settingsTabRawValue = "General"
     @State private var didInitializeLaunchState = false
+    @State private var didHandleAppTermination = false
 
     private var appearanceMode: AppAppearanceMode {
         AppAppearanceMode(rawValue: appearanceModeRawValue) ?? .system
@@ -34,6 +35,9 @@ struct CrabProxyMacApp: App {
                 }
                 .onChange(of: appearanceModeRawValue) { _, _ in
                     applyAppAppearance()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    handleAppWillTerminate()
                 }
         }
         .commands {
@@ -128,6 +132,13 @@ struct CrabProxyMacApp: App {
         if let window = NSApp.windows.first {
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    @MainActor
+    private func handleAppWillTerminate() {
+        guard !didHandleAppTermination else { return }
+        didHandleAppTermination = true
+        model.shutdownForAppTermination()
     }
 }
 

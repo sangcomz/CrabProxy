@@ -465,6 +465,19 @@ final class ProxyViewModel: ObservableObject {
     }
   }
 
+  func shutdownForAppTermination() {
+    guard let engine else { return }
+
+    do {
+      try engine.shutdownDaemon()
+    } catch {
+      // Best-effort fallback: at least stop active proxy task if daemon shutdown RPC fails.
+      try? engine.stop()
+    }
+
+    isRunning = false
+  }
+
   func clearLogs() {
     logFlushTask?.cancel()
     logFlushTask = nil

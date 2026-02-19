@@ -284,6 +284,12 @@ final class RustProxyEngine: @unchecked Sendable {
     _ = try invokeRPC(method: "proxy.stop", params: [:], ensureDaemon: false)
   }
 
+  func shutdownDaemon() throws {
+    stopLogStreaming()
+    guard canConnectSocket() else { return }
+    _ = try invokeRPC(method: "system.shutdown", params: [:], ensureDaemon: false)
+  }
+
   func isRunning() -> Bool {
     do {
       let raw = try invokeRPC(method: "proxy.status", params: [:], ensureDaemon: false)
