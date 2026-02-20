@@ -274,6 +274,8 @@ private struct AdvancedSettingsView: View {
                     isApplyingTransparentProxy: model.isApplyingTransparentProxy,
                     transparentStateText: model.transparentProxyStateText
                 )
+
+                MCPHttpAdvancedRow(service: model.mcpHttpService)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
@@ -733,6 +735,125 @@ private struct TransparentProxyAdvancedRow: View {
                 .padding(.top, 12)
                 .padding(.leading, 28)
                 .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CrabTheme.themeCardFill(for: colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CrabTheme.panelStroke(for: colorScheme), lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct MCPHttpAdvancedRow: View {
+    @ObservedObject var service: MCPHttpService
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var runningBinding: Binding<Bool> {
+        Binding(
+            get: { service.isRunning },
+            set: { enabled in
+                if enabled {
+                    service.start(ensureDaemon: true)
+                } else {
+                    service.stop()
+                }
+            }
+        )
+    }
+
+    private var portBinding: Binding<Int> {
+        Binding(
+            get: { Int(service.port) },
+            set: { rawValue in
+                let clamped = min(max(rawValue, 1), 65535)
+                service.port = UInt16(clamped)
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("MCP (HTTP)")
+                        .font(.custom("Avenir Next Demi Bold", size: 20))
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+
+                    Text("Run crab-mcp as a local Streamable HTTP server for IDE integration.")
+                        .font(.custom("Avenir Next Medium", size: 12))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                }
+
+                Spacer(minLength: 12)
+
+                Toggle("", isOn: runningBinding)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            HStack(spacing: 8) {
+                Text("Port")
+                    .font(.custom("Avenir Next Demi Bold", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                Stepper(value: portBinding, in: 1...65535) {
+                    Text("\(service.port)")
+                        .font(.custom("Menlo", size: 12))
+                        .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                }
+                .disabled(service.isRunning)
+            }
+
+            HStack(spacing: 8) {
+                Text("Endpoint")
+                    .font(.custom("Avenir Next Demi Bold", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                Text(service.endpoint ?? "Not running")
+                    .font(.custom("Menlo", size: 11))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Button("Copy Endpoint") {
+                    service.copyEndpointToPasteboard()
+                }
+                .buttonStyle(.bordered)
+                .disabled(service.endpoint == nil)
+            }
+
+            HStack(spacing: 8) {
+                Text("Token")
+                    .font(.custom("Avenir Next Demi Bold", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                Text(service.tokenFilePath ?? "Unavailable")
+                    .font(.custom("Menlo", size: 11))
+                    .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Button("Copy Token") {
+                    service.copyTokenToPasteboard()
+                }
+                .buttonStyle(.bordered)
+                .disabled(service.tokenFilePath == nil)
+            }
+
+            if let lastError = service.lastError, !lastError.isEmpty {
+                Text(lastError)
+                    .font(.custom("Avenir Next Medium", size: 12))
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+
+            if service.isRunning {
+                Text("Stop MCP to change port.")
+                    .font(.custom("Avenir Next Medium", size: 11))
+                    .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
             }
         }
         .padding(.horizontal, 16)

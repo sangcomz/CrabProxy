@@ -71,6 +71,40 @@ swift build -c release --package-path CrabProxyMacApp
 5. For mobile, open `Settings > Mobile` and configure phone proxy with the shown endpoint.
 6. On the phone, open `http://crab-proxy.local/` to install CA/profile.
 
+## MCP Usage (HTTP and Stdio)
+
+Crab Proxy MCP can be used in two ways.
+
+### 1) HTTP mode (recommended for app-managed use)
+
+Use this when you want Crab Proxy app to host MCP and share `Endpoint` + `Token`.
+
+1. Open `Settings > Advanced > MCP (HTTP)` and turn it on.
+2. Copy:
+   - `Endpoint` (example: `http://127.0.0.1:3847/mcp`)
+   - `Token` (copied from `~/Library/Application Support/CrabProxy/run/mcp.token`)
+3. In your MCP client, configure Streamable HTTP with:
+   - URL = `Endpoint`
+   - `Authorization: Bearer <Token>`
+
+### 2) Stdio mode (original/local process style)
+
+Use this when your IDE/AI client launches MCP server directly as a child process.
+
+Run command:
+
+```bash
+cargo run --manifest-path crab-mitm/Cargo.toml --bin crab-mcp -- --transport stdio
+```
+
+Or after build:
+
+```bash
+./crab-mitm/target/release/crab-mcp --transport stdio
+```
+
+In this mode, your client uses command/args process config (no HTTP endpoint needed).
+
 ## HTTPS MITM Behavior
 
 - CA is required for HTTPS MITM.

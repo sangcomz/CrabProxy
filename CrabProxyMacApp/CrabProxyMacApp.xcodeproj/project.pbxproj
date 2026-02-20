@@ -21,6 +21,7 @@
 		976805A4B40C1F10CB4ACEEC /* PFService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1A83F26CB163CC752C8CE6 /* PFService.swift */; };
 		9D691C5A6DE8BBBC461F9A1F /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55505981D7C9E4433F783A95 /* CoreFoundation.framework */; };
 		A40415D76F3EB84C71694682 /* ProxyLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40522E646FCB034700B1C13B /* ProxyLogStore.swift */; };
+		B1B76A5F3AB14CA6A25CA1F1 /* MCPHttpService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B76A603AB14CA6A25CA1F1 /* MCPHttpService.swift */; };
 		BC70968A3DCEB65D4FBED5B7 /* CrabTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809B137EBBC6E34E192A977C /* CrabTheme.swift */; };
 		C66E70F5C1E3DE1CE0079078 /* ProxyRuleModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0199009F5ADDA57CAE7B3ADB /* ProxyRuleModels.swift */; };
 		CD3EAA3F2868BFF19B8CF9EA /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51ABE9A6D9D984BDB517173D /* ProxyViewModel.swift */; };
@@ -52,6 +53,7 @@
 		8A1A83F26CB163CC752C8CE6 /* PFService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PFService.swift; sourceTree = "<group>"; };
 		9A7D4E6ADF8B617AEDC0F5CF /* RustProxyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustProxyEngine.swift; sourceTree = "<group>"; };
 		A07CFBD63E063DCE9BE42CBA /* HelperInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperInstaller.swift; sourceTree = "<group>"; };
+		B1B76A603AB14CA6A25CA1F1 /* MCPHttpService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPHttpService.swift; sourceTree = "<group>"; };
 		B8C26226EB5A916FD1E4B2BC /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		DB162EFAACD0077B3CAE9CD9 /* CrabProxyMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrabProxyMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaceService.swift; sourceTree = "<group>"; };
@@ -109,6 +111,7 @@
 				A07CFBD63E063DCE9BE42CBA /* HelperInstaller.swift */,
 				6483E384ADDF7F11BF93DEAF /* HelperProtocol.swift */,
 				13D822FEA054528BA02B126A /* LocalClientAppResolver.swift */,
+				B1B76A603AB14CA6A25CA1F1 /* MCPHttpService.swift */,
 				367190D2C35FAD9F04F45AF6 /* MacSystemProxyService.swift */,
 				E7209091A2FC2CFA676140A2 /* NetworkInterfaceService.swift */,
 				8A1A83F26CB163CC752C8CE6 /* PFService.swift */,
@@ -235,6 +238,7 @@
 				2F67975A9930D855428D4CD8 /* HelperInstaller.swift in Sources */,
 				0FA9EC5DACF24EC9D97523BA /* HelperProtocol.swift in Sources */,
 				18FBACCFA4FB4E56E18522B0 /* LocalClientAppResolver.swift in Sources */,
+				B1B76A5F3AB14CA6A25CA1F1 /* MCPHttpService.swift in Sources */,
 				41EDC872AF90D68678FC8544 /* MacSystemProxyService.swift in Sources */,
 				F3F2547EF444F5A2F9277945 /* NetworkInterfaceService.swift in Sources */,
 				976805A4B40C1F10CB4ACEEC /* PFService.swift in Sources */,

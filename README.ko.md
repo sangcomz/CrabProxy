@@ -65,6 +65,40 @@ swift build -c release --package-path CrabProxyMacApp
 5. 모바일은 `Settings > Mobile`에서 표시된 엔드포인트로 프록시 설정
 6. 모바일 브라우저에서 `http://crab-proxy.local/` 접속 후 CA/프로파일 설치
 
+## MCP 사용 방법 (HTTP / Stdio)
+
+Crab Proxy MCP는 두 가지 방식으로 사용할 수 있습니다.
+
+### 1) HTTP 방식 (앱에서 켜는 방식, 권장)
+
+앱이 MCP 서버를 띄우고 `Endpoint` + `Token`을 외부 IDE/AI 클라이언트에 연결하는 방식입니다.
+
+1. `Settings > Advanced > MCP (HTTP)`를 켭니다.
+2. 아래 값을 복사합니다.
+   - `Endpoint` (예: `http://127.0.0.1:3847/mcp`)
+   - `Token` (`~/Library/Application Support/CrabProxy/run/mcp.token` 기반)
+3. MCP 클라이언트에서 Streamable HTTP로 설정합니다.
+   - URL = `Endpoint`
+   - `Authorization: Bearer <Token>`
+
+### 2) Stdio 방식 (기존 방식)
+
+IDE/AI 클라이언트가 `crab-mcp` 프로세스를 직접 실행하는 방식입니다.
+
+실행 명령:
+
+```bash
+cargo run --manifest-path crab-mitm/Cargo.toml --bin crab-mcp -- --transport stdio
+```
+
+빌드 후 실행:
+
+```bash
+./crab-mitm/target/release/crab-mcp --transport stdio
+```
+
+이 방식은 HTTP 엔드포인트 없이, MCP 클라이언트의 command/args 실행 설정으로 연결합니다.
+
 ## HTTPS MITM 동작
 
 - HTTPS MITM은 CA가 필요합니다.

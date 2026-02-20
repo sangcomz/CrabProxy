@@ -235,6 +235,7 @@ final class ProxyViewModel: ObservableObject {
   private let caCertService: any CACertServicing
   private let pfService: any PFServicing
   private let systemProxyService: any MacSystemProxyServicing
+  let mcpHttpService = MCPHttpService()
   private let clientAppResolver = LocalClientAppResolver(listenPort: 8888)
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var pendingClientAppResolutionIDs: Set<ProxyLogEntry.ID> = []
@@ -466,6 +467,7 @@ final class ProxyViewModel: ObservableObject {
   }
 
   func shutdownForAppTermination() {
+    mcpHttpService.stop()
     guard let engine else { return }
 
     do {
