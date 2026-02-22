@@ -856,7 +856,7 @@ private struct MCPHttpAdvancedRow: View {
                     .textSelection(.enabled)
             }
 
-            if service.isRunning {
+            if service.isRunning, visibleError != nil {
                 Text("Stop MCP to change port.")
                     .font(.custom("Avenir Next Medium", size: 11))
                     .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
@@ -1038,11 +1038,15 @@ struct RulesSettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
+            model.startRulesRuntimeSync()
             loadDraftsFromModel(force: !didInitializeDrafts)
             consumeStagedAllowRuleIfNeeded()
             consumeStagedMapLocalRuleIfNeeded()
             consumeStagedMapRemoteRuleIfNeeded()
             consumeStagedStatusRewriteRuleIfNeeded()
+        }
+        .onDisappear {
+            model.stopRulesRuntimeSync()
         }
         .onChange(of: model.allowRules) { _, _ in
             loadDraftsFromModel(force: false)
@@ -1522,6 +1526,8 @@ private struct MapLocalRuleEditorSheet: View {
     let onPickFile: () -> String?
 
     @State private var draftRule: MapLocalRuleInput
+    @State private var inlineTextEditorHeight: CGFloat
+    @State private var inlineTextEditorDragBaseHeight: CGFloat?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1537,6 +1543,10 @@ private struct MapLocalRuleEditorSheet: View {
         self.allowDelete = allowDelete
         self.onPickFile = onPickFile
         _draftRule = State(initialValue: initialRule)
+        _inlineTextEditorHeight = State(
+            initialValue: initialRule.sourceType == .text ? 220 : 180
+        )
+        _inlineTextEditorDragBaseHeight = State(initialValue: nil)
     }
 
     var body: some View {
@@ -1583,26 +1593,97 @@ private struct MapLocalRuleEditorSheet: View {
                 }
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(draftRule.sourceType == .file ? "Local File" : "Inline Text")
-                        .font(.custom("Avenir Next Demi Bold", size: 11))
-                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
-                    TextField(
-                        draftRule.sourceType == .file ? "Local file path" : "Inline text body",
-                        text: $draftRule.sourceValue
-                    )
-                    .textFieldStyle(.roundedBorder)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if draftRule.sourceType == .file {
+                HStack(alignment: .bottom, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Local File")
+                            .font(.custom("Avenir Next Demi Bold", size: 11))
+                            .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                        TextField("Local file path", text: $draftRule.sourceValue)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if draftRule.sourceType == .file {
                     Button("Choose File…") {
                         if let selected = onPickFile() {
                             draftRule.sourceValue = selected
                         }
                     }
                     .buttonStyle(.bordered)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Inline Text")
+                        .font(.custom("Avenir Next Demi Bold", size: 11))
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                    ZStack(alignment: .topLeading) {
+                        if draftRule.sourceValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Inline text body")
+                                .font(.custom("Menlo", size: 12))
+                                .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 12)
+                                .allowsHitTesting(false)
+                        }
+
+                        TextEditor(text: $draftRule.sourceValue)
+                            .font(.custom("Menlo", size: 12))
+                            .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
+                            .scrollContentBackground(.hidden)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: inlineTextEditorHeight)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(CrabTheme.inputFill(for: colorScheme))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
+                            )
+                    )
+
+                    HStack(spacing: 8) {
+                        Text("Scroll inside editor • Drag handle to resize")
+                            .font(.custom("Avenir Next Medium", size: 11))
+                            .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+
+                        Spacer()
+
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.and.down")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("\(Int(inlineTextEditorHeight)) pt")
+                                .font(.custom("Menlo", size: 11))
+                        }
+                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(CrabTheme.inputFill(for: colorScheme))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(CrabTheme.inputStroke(for: colorScheme), lineWidth: 1)
+                                )
+                        )
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    let base = inlineTextEditorDragBaseHeight ?? inlineTextEditorHeight
+                                    if inlineTextEditorDragBaseHeight == nil {
+                                        inlineTextEditorDragBaseHeight = base
+                                    }
+                                    inlineTextEditorHeight = max(140, min(520, base + value.translation.height))
+                                }
+                                .onEnded { _ in
+                                    inlineTextEditorDragBaseHeight = nil
+                                }
+                        )
+                    }
                 }
             }
 
@@ -1642,7 +1723,15 @@ private struct MapLocalRuleEditorSheet: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 620, minHeight: 360, alignment: .topLeading)
+        .frame(
+            minWidth: draftRule.sourceType == .text ? 760 : 620,
+            minHeight: draftRule.sourceType == .text ? 500 : 360,
+            alignment: .topLeading
+        )
+        .onChange(of: draftRule.sourceType) { _, newValue in
+            guard newValue == .text else { return }
+            inlineTextEditorHeight = max(inlineTextEditorHeight, 220)
+        }
     }
 }
 

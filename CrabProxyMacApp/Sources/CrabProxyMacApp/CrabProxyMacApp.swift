@@ -124,6 +124,7 @@ struct CrabProxyMacApp: App {
         didInitializeLaunchState = true
         settingsTabRawValue = "General"
         currentScreenRawValue = "traffic"
+        model.clearLogs(showStatus: false)
     }
 
     @MainActor

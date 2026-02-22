@@ -143,10 +143,11 @@ struct ContentView: View {
                 ClientAppGroup(label: label, count: entries.count)
             }
             .sorted {
-                if $0.count == $1.count {
+                let order = $0.label.localizedCaseInsensitiveCompare($1.label)
+                if order == .orderedSame {
                     return $0.label < $1.label
                 }
-                return $0.count > $1.count
+                return order == .orderedAscending
             }
     }
 

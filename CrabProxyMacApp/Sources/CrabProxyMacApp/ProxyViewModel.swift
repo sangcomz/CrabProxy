@@ -86,6 +86,25 @@ final class ProxyViewModel: ObservableObject {
     var toStatusCode: String
   }
 
+  private struct CanonicalMapLocalRule: Equatable {
+    var matcher: String
+    var sourceType: RuleSourceType
+    var sourceValue: String
+    var statusCode: UInt16
+    var contentType: String?
+  }
+
+  private struct CanonicalMapRemoteRule: Equatable {
+    var matcher: String
+    var destinationURL: String
+  }
+
+  private struct CanonicalStatusRewriteRule: Equatable {
+    var matcher: String
+    var fromStatusCode: UInt16?
+    var toStatusCode: UInt16
+  }
+
   let certPortalURL = "http://crab-proxy.local/"
   private let listenPort: UInt16 = 8888
   @Published var allowLANConnections = true {
@@ -217,6 +236,7 @@ final class ProxyViewModel: ObservableObject {
   private let internalCACommonName = "Crab Proxy Internal Root CA"
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
+  private let runtimeRulesSyncIntervalNanoseconds: UInt64 = 1_000_000_000
   private let transparentProxyPort: UInt16 = 8889
   private let clientAppResolutionBatchSize = 24
   private let maxClientAppResolutionAttempts = 2
@@ -240,11 +260,14 @@ final class ProxyViewModel: ObservableObject {
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var pendingClientAppResolutionIDs: Set<ProxyLogEntry.ID> = []
   private var clientAppResolutionAttempts: [ProxyLogEntry.ID: Int] = [:]
+  private var suppressIncomingLogs = false
+  private var suppressIncomingLogsGeneration: UInt64 = 0
   private var logFlushTask: Task<Void, Never>?
   private var listenAddressApplyTask: Task<Void, Never>?
   private var lanClientAllowlistApplyTask: Task<Void, Never>?
   private var inspectBodiesApplyTask: Task<Void, Never>?
   private var throttleApplyTask: Task<Void, Never>?
+  private var runtimeRulesSyncTask: Task<Void, Never>?
   private var pendingLANAccessQueue: [String] = []
   private var dismissedLANAccessIPs: Set<String> = []
   private var cancellables: Set<AnyCancellable> = []
@@ -276,7 +299,8 @@ final class ProxyViewModel: ObservableObject {
     refreshHelperStatus()
     do {
       self.engine = try makeEngine()
-      self.statusText = "Ready"
+      self.isRunning = self.engine?.isRunning() ?? false
+      self.statusText = self.isRunning ? "Running" : "Ready"
     } catch {
       self.statusText = "Init failed: \(error.localizedDescription)"
     }
@@ -289,6 +313,7 @@ final class ProxyViewModel: ObservableObject {
     lanClientAllowlistApplyTask?.cancel()
     inspectBodiesApplyTask?.cancel()
     throttleApplyTask?.cancel()
+    runtimeRulesSyncTask?.cancel()
   }
 
   var selectedLog: ProxyLogEntry? {
@@ -411,21 +436,16 @@ final class ProxyViewModel: ObservableObject {
       return
     }
 
-    do {
-      try engine.setListenAddress(listenAddress)
-      try applyLANAccessConfig(to: engine)
-      try engine.setInspectEnabled(inspectBodies)
-      try applyThrottleConfig(to: engine)
-      if transparentProxyEnabled {
-        try engine.setTransparentEnabled(true)
-        try engine.setTransparentPort(transparentProxyPort)
-      }
-      try syncRules(to: engine)
-      try ensureInternalCALoaded(engine: engine)
+    if engine.isRunning() && isRunning {
+      isRunning = true
+      statusText = "Running"
+      return
+    }
 
-      try engine.start()
-      isRunning = engine.isRunning()
-      statusText = isRunning ? "Running" : "Stopped"
+    do {
+      try transitionProxyRuntime(interceptEnabled: true)
+      isRunning = true
+      statusText = "Running"
     } catch {
       isRunning = false
       let nsError = error as NSError
@@ -443,32 +463,23 @@ final class ProxyViewModel: ObservableObject {
       return
     }
 
-    var failure: Error?
-    if let engine {
-      do {
-        try engine.stop()
-      } catch {
-        failure = error
-      }
-    }
-
     do {
-      try recreateEngine()
+      try transitionProxyRuntime(interceptEnabled: false)
       isRunning = false
-      statusText = failure == nil ? "Stopped" : "Stopped (forced reset)"
+      statusText = "Stopped"
     } catch {
-      isRunning = self.engine?.isRunning() ?? false
-      if let failure {
-        statusText = "Stop failed: \(failure.localizedDescription); reset failed: \(error.localizedDescription)"
-      } else {
-        statusText = "Stop failed: \(error.localizedDescription)"
-      }
+      isRunning = false
+      statusText = "Stop failed: \(error.localizedDescription)"
     }
   }
 
   func shutdownForAppTermination() {
     mcpHttpService.stop()
     guard let engine else { return }
+
+    // Best-effort: clear daemon-side ring buffer so the next app launch starts clean
+    // even if daemon shutdown falls back to proxy.stop().
+    try? engine.clearDaemonLogs()
 
     do {
       try engine.shutdownDaemon()
@@ -480,7 +491,20 @@ final class ProxyViewModel: ObservableObject {
     isRunning = false
   }
 
-  func clearLogs() {
+  func clearLogs(showStatus: Bool = true) {
+    suppressIncomingLogs = true
+    suppressIncomingLogsGeneration &+= 1
+    let clearGeneration = suppressIncomingLogsGeneration
+
+    var daemonClearError: Error?
+    if let engine {
+      do {
+        try engine.clearDaemonLogs()
+      } catch {
+        daemonClearError = error
+      }
+    }
+
     logFlushTask?.cancel()
     logFlushTask = nil
     pendingLogEvents.removeAll(keepingCapacity: true)
@@ -489,6 +513,21 @@ final class ProxyViewModel: ObservableObject {
     logs = logStore.clear()
     filteredLogs.removeAll(keepingCapacity: true)
     selectedLogID = nil
+
+    if showStatus {
+      if let daemonClearError {
+        statusText = "Local logs cleared (daemon clear failed: \(daemonClearError.localizedDescription))"
+      } else {
+        statusText = "Traffic logs cleared"
+      }
+    }
+
+    Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self else { return }
+      guard self.suppressIncomingLogsGeneration == clearGeneration else { return }
+      self.suppressIncomingLogs = false
+    }
   }
 
   func replay(entryID: ProxyLogEntry.ID) {
@@ -578,9 +617,10 @@ final class ProxyViewModel: ObservableObject {
     Task {
       defer { isApplyingTransparentProxy = false }
       do {
-        let wasRunning = engine?.isRunning() ?? false
-        if wasRunning {
-          stopProxy()
+        let runtimeWasRunning = engine?.isRunning() ?? false
+        let wasInterceptEnabled = isRunning
+        if runtimeWasRunning {
+          try stopProxyRuntimeForReconfigure()
         }
 
         guard let engine else {
@@ -598,8 +638,9 @@ final class ProxyViewModel: ObservableObject {
           caCertInstalledInKeychain = true
         }
 
-        if wasRunning {
-          startProxy()
+        if runtimeWasRunning {
+          try startProxyRuntime(interceptEnabled: wasInterceptEnabled)
+          isRunning = wasInterceptEnabled
         }
 
         transparentProxyEnabled = true
@@ -624,13 +665,18 @@ final class ProxyViewModel: ObservableObject {
         try await pfService.disable()
 
         if let engine {
-          let wasRunning = engine.isRunning()
-          if wasRunning {
-            stopProxy()
+          let runtimeWasRunning = engine.isRunning()
+          let wasInterceptEnabled = isRunning
+          if runtimeWasRunning {
+            try stopProxyRuntimeForReconfigure()
           }
-          try engine.setTransparentEnabled(false)
-          if wasRunning {
-            startProxy()
+          guard let activeEngine = self.engine else {
+            throw ProxyViewModelError.invalidValue("Engine not initialized")
+          }
+          try activeEngine.setTransparentEnabled(false)
+          if runtimeWasRunning {
+            try startProxyRuntime(interceptEnabled: wasInterceptEnabled)
+            isRunning = wasInterceptEnabled
           }
         }
 
@@ -953,10 +999,16 @@ final class ProxyViewModel: ObservableObject {
       return false
     }
 
-    let runtimeWasRunning = engine.isRunning()
-    if runtimeWasRunning {
-      try engine.stop()
-      try recreateEngine()
+    let interceptWasEnabled = isRunning
+    let runtimeIsActive = engine.isRunning()
+    if runtimeIsActive && !interceptWasEnabled {
+      // Bypass mode keeps the proxy server alive with runtime rules intentionally cleared.
+      // Persist the UI rules but defer applying them until intercept mode is enabled again.
+      return false
+    }
+
+    if interceptWasEnabled {
+      try stopProxyRuntimeForReconfigure()
     }
 
     guard let activeEngine = self.engine else {
@@ -964,21 +1016,12 @@ final class ProxyViewModel: ObservableObject {
     }
     try syncRules(to: activeEngine)
 
-    if runtimeWasRunning {
-      try activeEngine.setListenAddress(listenAddress)
-      try applyLANAccessConfig(to: activeEngine)
-      try activeEngine.setInspectEnabled(inspectBodies)
-      try applyThrottleConfig(to: activeEngine)
-      if transparentProxyEnabled {
-        try activeEngine.setTransparentEnabled(true)
-        try activeEngine.setTransparentPort(transparentProxyPort)
-      }
-      try ensureInternalCALoaded(engine: activeEngine)
-      try activeEngine.start()
+    if interceptWasEnabled {
+      try startProxyRuntime(interceptEnabled: true)
     }
 
-    isRunning = activeEngine.isRunning()
-    return runtimeWasRunning
+    isRunning = interceptWasEnabled
+    return interceptWasEnabled
   }
 
   private func makeEngine() throws -> RustProxyEngine {
@@ -1010,6 +1053,130 @@ final class ProxyViewModel: ObservableObject {
       mapRemoteRules: mapRemoteRules,
       statusRewriteRules: statusRewriteRules
     )
+  }
+
+  private func stopProxyRuntimeForReconfigure() throws {
+    guard let engine else {
+      throw ProxyViewModelError.invalidValue("Engine not initialized")
+    }
+    if engine.isRunning() {
+      try engine.stop()
+    }
+    try recreateEngine()
+  }
+
+  private func startProxyRuntime(interceptEnabled: Bool) throws {
+    guard let engine else {
+      throw ProxyViewModelError.invalidValue("Engine not initialized")
+    }
+
+    try engine.setListenAddress(listenAddress)
+    try applyLANAccessConfig(to: engine)
+    if transparentProxyEnabled {
+      try engine.setTransparentEnabled(true)
+      try engine.setTransparentPort(transparentProxyPort)
+    }
+
+    if interceptEnabled {
+      try engine.setInspectEnabled(inspectBodies)
+      try applyThrottleConfig(to: engine)
+      try syncRules(to: engine)
+      try ensureInternalCALoaded(engine: engine)
+    } else {
+      try engine.setInspectEnabled(false)
+      try applyBypassThrottleConfig(to: engine)
+      try engine.clearRules()
+    }
+
+    try engine.start()
+  }
+
+  private func transitionProxyRuntime(interceptEnabled: Bool) throws {
+    guard let engine else {
+      throw ProxyViewModelError.invalidValue("Engine not initialized")
+    }
+    if engine.isRunning() {
+      try stopProxyRuntimeForReconfigure()
+    }
+    try startProxyRuntime(interceptEnabled: interceptEnabled)
+  }
+
+  private func applyBypassThrottleConfig(to engine: RustProxyEngine) throws {
+    try engine.setThrottleEnabled(false)
+    try engine.setThrottleLatencyMs(0)
+    try engine.setThrottleDownstreamBytesPerSecond(0)
+    try engine.setThrottleUpstreamBytesPerSecond(0)
+    try engine.setThrottleOnlySelectedHosts(false)
+    try engine.clearThrottleSelectedHosts()
+  }
+
+  func startRulesRuntimeSync() {
+    guard runtimeRulesSyncTask == nil else { return }
+    runtimeRulesSyncTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.runRulesRuntimeSyncLoop()
+    }
+  }
+
+  func stopRulesRuntimeSync() {
+    runtimeRulesSyncTask?.cancel()
+    runtimeRulesSyncTask = nil
+  }
+
+  private func runRulesRuntimeSyncLoop() async {
+    refreshRulesFromRuntimeIfChanged()
+
+    while !Task.isCancelled {
+      do {
+        try await Task.sleep(nanoseconds: runtimeRulesSyncIntervalNanoseconds)
+      } catch {
+        break
+      }
+      if Task.isCancelled {
+        break
+      }
+      refreshRulesFromRuntimeIfChanged()
+    }
+  }
+
+  private func refreshRulesFromRuntimeIfChanged() {
+    guard isRunning else { return }
+    guard let engine else { return }
+
+    let runtimeRules: RuntimeRulesDump
+    do {
+      runtimeRules = try engine.dumpRules()
+    } catch {
+      return
+    }
+
+    let runtimeAllow = runtimeRules.allowlist
+    let runtimeMapLocal = canonicalMapLocalRules(from: runtimeRules.mapLocal)
+    let runtimeMapRemote = canonicalMapRemoteRules(from: runtimeRules.mapRemote)
+    let runtimeStatusRewrite = canonicalStatusRewriteRules(from: runtimeRules.statusRewrite)
+
+    let currentAllow = ruleManager.normalizedAllowMatchers(from: allowRules)
+    let currentMapLocal = canonicalEnabledMapLocalRules(from: mapLocalRules)
+    let currentMapRemote = canonicalEnabledMapRemoteRules(from: mapRemoteRules)
+    let currentStatusRewrite = canonicalEnabledStatusRewriteRules(from: statusRewriteRules)
+
+    guard currentAllow != runtimeAllow
+      || currentMapLocal != runtimeMapLocal
+      || currentMapRemote != runtimeMapRemote
+      || currentStatusRewrite != runtimeStatusRewrite
+    else {
+      return
+    }
+
+    let disabledMapLocalRules = mapLocalRules.filter { !$0.isEnabled }
+    let disabledMapRemoteRules = mapRemoteRules.filter { !$0.isEnabled }
+    let disabledStatusRewriteRules = statusRewriteRules.filter { !$0.isEnabled }
+
+    allowRules = runtimeAllow.map { AllowRuleInput(matcher: $0) }
+    mapLocalRules = mapLocalRuleInputs(from: runtimeRules.mapLocal) + disabledMapLocalRules
+    mapRemoteRules = mapRemoteRuleInputs(from: runtimeRules.mapRemote) + disabledMapRemoteRules
+    statusRewriteRules =
+      statusRewriteRuleInputs(from: runtimeRules.statusRewrite) + disabledStatusRewriteRules
   }
 
   private func applyThrottleConfig(to engine: RustProxyEngine) throws {
@@ -1395,6 +1562,8 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func appendLog(level: UInt8, message: String) {
+    guard isRunning else { return }
+    guard !suppressIncomingLogs else { return }
     handleLANAccessRequestLog(message)
     pendingLogEvents.append((level, message))
     scheduleLogFlushIfNeeded()
@@ -1638,6 +1807,130 @@ final class ProxyViewModel: ObservableObject {
 
   private func trimmed(_ value: String) -> String {
     value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func canonicalEnabledMapLocalRules(
+    from rules: [MapLocalRuleInput]
+  ) -> [CanonicalMapLocalRule] {
+    rules.compactMap { rule in
+      guard rule.isEnabled else { return nil }
+      let matcher = trimmed(rule.matcher)
+      let sourceValue = trimmed(rule.sourceValue)
+      guard !matcher.isEmpty, !sourceValue.isEmpty else { return nil }
+      let statusCode = UInt16(trimmed(rule.statusCode)) ?? 200
+      let contentType = {
+        let value = trimmed(rule.contentType)
+        return value.isEmpty ? nil : value
+      }()
+      return CanonicalMapLocalRule(
+        matcher: matcher,
+        sourceType: rule.sourceType,
+        sourceValue: sourceValue,
+        statusCode: statusCode,
+        contentType: contentType
+      )
+    }
+  }
+
+  private func canonicalMapLocalRules(
+    from rules: [RuntimeRulesDump.MapLocalEntry]
+  ) -> [CanonicalMapLocalRule] {
+    rules.map { rule in
+      CanonicalMapLocalRule(
+        matcher: rule.matcher,
+        sourceType: rule.source.kind == .file ? .file : .text,
+        sourceValue: rule.source.value,
+        statusCode: rule.statusCode,
+        contentType: rule.contentType
+      )
+    }
+  }
+
+  private func canonicalEnabledMapRemoteRules(
+    from rules: [MapRemoteRuleInput]
+  ) -> [CanonicalMapRemoteRule] {
+    rules.compactMap { rule in
+      guard rule.isEnabled else { return nil }
+      let matcher = trimmed(rule.matcher)
+      let destinationURL = trimmed(rule.destinationURL)
+      guard !matcher.isEmpty, !destinationURL.isEmpty else { return nil }
+      return CanonicalMapRemoteRule(matcher: matcher, destinationURL: destinationURL)
+    }
+  }
+
+  private func canonicalMapRemoteRules(
+    from rules: [RuntimeRulesDump.MapRemoteEntry]
+  ) -> [CanonicalMapRemoteRule] {
+    rules.map { CanonicalMapRemoteRule(matcher: $0.matcher, destinationURL: $0.destination) }
+  }
+
+  private func canonicalEnabledStatusRewriteRules(
+    from rules: [StatusRewriteRuleInput]
+  ) -> [CanonicalStatusRewriteRule] {
+    rules.compactMap { rule in
+      guard rule.isEnabled else { return nil }
+      let matcher = trimmed(rule.matcher)
+      guard !matcher.isEmpty else { return nil }
+      let fromStatusCode = UInt16(trimmed(rule.fromStatusCode))
+      let toStatusCode = UInt16(trimmed(rule.toStatusCode)) ?? 200
+      return CanonicalStatusRewriteRule(
+        matcher: matcher,
+        fromStatusCode: fromStatusCode,
+        toStatusCode: toStatusCode
+      )
+    }
+  }
+
+  private func canonicalStatusRewriteRules(
+    from rules: [RuntimeRulesDump.StatusRewriteEntry]
+  ) -> [CanonicalStatusRewriteRule] {
+    rules.map {
+      CanonicalStatusRewriteRule(
+        matcher: $0.matcher,
+        fromStatusCode: $0.fromStatusCode,
+        toStatusCode: $0.toStatusCode
+      )
+    }
+  }
+
+  private func mapLocalRuleInputs(
+    from rules: [RuntimeRulesDump.MapLocalEntry]
+  ) -> [MapLocalRuleInput] {
+    rules.map { rule in
+      MapLocalRuleInput(
+        isEnabled: true,
+        matcher: rule.matcher,
+        sourceType: rule.source.kind == .file ? .file : .text,
+        sourceValue: rule.source.value,
+        statusCode: String(rule.statusCode),
+        contentType: rule.contentType ?? ""
+      )
+    }
+  }
+
+  private func mapRemoteRuleInputs(
+    from rules: [RuntimeRulesDump.MapRemoteEntry]
+  ) -> [MapRemoteRuleInput] {
+    rules.map { rule in
+      MapRemoteRuleInput(
+        isEnabled: true,
+        matcher: rule.matcher,
+        destinationURL: rule.destination
+      )
+    }
+  }
+
+  private func statusRewriteRuleInputs(
+    from rules: [RuntimeRulesDump.StatusRewriteEntry]
+  ) -> [StatusRewriteRuleInput] {
+    rules.map { rule in
+      StatusRewriteRuleInput(
+        isEnabled: true,
+        matcher: rule.matcher,
+        fromStatusCode: rule.fromStatusCode.map(String.init) ?? "",
+        toStatusCode: String(rule.toStatusCode)
+      )
+    }
   }
 
   private func domainName(from urlString: String) -> String {

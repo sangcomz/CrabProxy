@@ -41,6 +41,41 @@ struct StatusRewriteRuleConfig {
   var toStatusCode: UInt16
 }
 
+struct RuntimeRulesDump: Equatable {
+  struct MapLocalSourceEntry: Equatable {
+    enum Kind: String, Equatable {
+      case file
+      case text
+    }
+
+    var kind: Kind
+    var value: String
+  }
+
+  struct MapLocalEntry: Equatable {
+    var matcher: String
+    var source: MapLocalSourceEntry
+    var statusCode: UInt16
+    var contentType: String?
+  }
+
+  struct MapRemoteEntry: Equatable {
+    var matcher: String
+    var destination: String
+  }
+
+  struct StatusRewriteEntry: Equatable {
+    var matcher: String
+    var fromStatusCode: UInt16?
+    var toStatusCode: UInt16
+  }
+
+  var allowlist: [String]
+  var mapLocal: [MapLocalEntry]
+  var mapRemote: [MapRemoteEntry]
+  var statusRewrite: [StatusRewriteEntry]
+}
+
 enum CAKeyAlgorithm: UInt32 {
   case ecdsaP256 = 0
   case rsa2048 = 1
@@ -221,6 +256,20 @@ final class RustProxyEngine: @unchecked Sendable {
     _ = try invokeRPC(method: "engine.rules_clear", params: [:])
   }
 
+  func clearDaemonLogs() throws {
+    let shouldResumeStreaming = logStreamingActive && onLog != nil
+    stopLogStreamingAndDrain()
+
+    let raw = try invokeRPC(method: "logs.clear", params: [:], ensureDaemon: false)
+    if let payload = raw as? [String: Any], let next = payload["next_seq"] as? NSNumber {
+      logTailCursor = next.uint64Value
+    }
+
+    if shouldResumeStreaming {
+      startLogStreamingIfNeeded()
+    }
+  }
+
   func addAllowRule(_ matcher: String) throws {
     _ = try invokeRPC(
       method: "engine.rules_add_allow",
@@ -272,6 +321,11 @@ final class RustProxyEngine: @unchecked Sendable {
         "to_status_code": Int(rule.toStatusCode),
       ]
     )
+  }
+
+  func dumpRules() throws -> RuntimeRulesDump {
+    let raw = try invokeRPC(method: "engine.rules_dump", params: [:], ensureDaemon: false)
+    return try parseRuntimeRulesDump(raw)
   }
 
   func start() throws {
@@ -366,6 +420,83 @@ final class RustProxyEngine: @unchecked Sendable {
     try throwIfRPCError(response)
 
     return response["result"] ?? NSNull()
+  }
+
+  private func parseRuntimeRulesDump(_ raw: Any) throws -> RuntimeRulesDump {
+    guard let payload = raw as? [String: Any] else {
+      throw RustProxyError.internalState("engine.rules_dump returned invalid payload")
+    }
+
+    let allowlist = (payload["allowlist"] as? [Any] ?? []).compactMap { $0 as? String }
+
+    let mapLocalEntries = try (payload["map_local"] as? [Any] ?? []).map { item in
+      guard let object = item as? [String: Any] else {
+        throw RustProxyError.internalState("engine.rules_dump map_local entry is invalid")
+      }
+      guard let matcher = object["matcher"] as? String else {
+        throw RustProxyError.internalState("engine.rules_dump map_local matcher is missing")
+      }
+      guard let sourceObject = object["source"] as? [String: Any] else {
+        throw RustProxyError.internalState("engine.rules_dump map_local source is missing")
+      }
+      guard let sourceKindRaw = sourceObject["kind"] as? String,
+            let sourceKind = RuntimeRulesDump.MapLocalSourceEntry.Kind(rawValue: sourceKindRaw)
+      else {
+        throw RustProxyError.internalState("engine.rules_dump map_local source kind is invalid")
+      }
+      guard let sourceValue = sourceObject["value"] as? String else {
+        throw RustProxyError.internalState("engine.rules_dump map_local source value is missing")
+      }
+      guard let statusNumber = object["status_code"] as? NSNumber else {
+        throw RustProxyError.internalState("engine.rules_dump map_local status_code is missing")
+      }
+      let contentType = object["content_type"] as? String
+      return RuntimeRulesDump.MapLocalEntry(
+        matcher: matcher,
+        source: RuntimeRulesDump.MapLocalSourceEntry(kind: sourceKind, value: sourceValue),
+        statusCode: UInt16(truncating: statusNumber),
+        contentType: contentType
+      )
+    }
+
+    let mapRemoteEntries = try (payload["map_remote"] as? [Any] ?? []).map { item in
+      guard let object = item as? [String: Any] else {
+        throw RustProxyError.internalState("engine.rules_dump map_remote entry is invalid")
+      }
+      guard let matcher = object["matcher"] as? String else {
+        throw RustProxyError.internalState("engine.rules_dump map_remote matcher is missing")
+      }
+      guard let destination = object["destination"] as? String else {
+        throw RustProxyError.internalState("engine.rules_dump map_remote destination is missing")
+      }
+      return RuntimeRulesDump.MapRemoteEntry(matcher: matcher, destination: destination)
+    }
+
+    let statusRewriteEntries = try (payload["status_rewrite"] as? [Any] ?? []).map { item in
+      guard let object = item as? [String: Any] else {
+        throw RustProxyError.internalState("engine.rules_dump status_rewrite entry is invalid")
+      }
+      guard let matcher = object["matcher"] as? String else {
+        throw RustProxyError.internalState("engine.rules_dump status_rewrite matcher is missing")
+      }
+      guard let toStatusNumber = object["to_status_code"] as? NSNumber else {
+        throw RustProxyError.internalState("engine.rules_dump status_rewrite to_status_code is missing")
+      }
+
+      let fromStatusNumber = object["from_status_code"] as? NSNumber
+      return RuntimeRulesDump.StatusRewriteEntry(
+        matcher: matcher,
+        fromStatusCode: fromStatusNumber.map { UInt16(truncating: $0) },
+        toStatusCode: UInt16(truncating: toStatusNumber)
+      )
+    }
+
+    return RuntimeRulesDump(
+      allowlist: allowlist,
+      mapLocal: mapLocalEntries,
+      mapRemote: mapRemoteEntries,
+      statusRewrite: statusRewriteEntries
+    )
   }
 
   private func throwIfRPCError(_ response: [String: Any]) throws {
@@ -477,6 +608,16 @@ final class RustProxyEngine: @unchecked Sendable {
 
   private func stopLogStreaming() {
     logStreamingActive = false
+  }
+
+  private func stopLogStreamingAndDrain() {
+    let wasActive = logStreamingActive
+    logStreamingActive = false
+    guard wasActive else { return }
+
+    // Wait until the current polling loop iteration exits so clear operations can
+    // resync the cursor without the previous batch racing in behind it.
+    logQueue.sync { }
   }
 
   private static func resolveBinaries() throws -> String {
