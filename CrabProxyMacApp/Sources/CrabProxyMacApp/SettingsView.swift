@@ -778,6 +778,16 @@ private struct MCPHttpAdvancedRow: View {
         )
     }
 
+    private var visibleError: String? {
+        guard let raw = service.lastError?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty
+        else { return nil }
+        if raw.localizedCaseInsensitiveContains("listening on http://") {
+            return nil
+        }
+        return raw
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
@@ -785,10 +795,6 @@ private struct MCPHttpAdvancedRow: View {
                     Text("MCP (HTTP)")
                         .font(.custom("Avenir Next Demi Bold", size: 20))
                         .foregroundStyle(CrabTheme.primaryText(for: colorScheme))
-
-                    Text("Run crab-mcp as a local Streamable HTTP server for IDE integration.")
-                        .font(.custom("Avenir Next Medium", size: 12))
-                        .foregroundStyle(CrabTheme.secondaryText(for: colorScheme))
                 }
 
                 Spacer(minLength: 12)
@@ -843,7 +849,7 @@ private struct MCPHttpAdvancedRow: View {
                 .disabled(service.tokenFilePath == nil)
             }
 
-            if let lastError = service.lastError, !lastError.isEmpty {
+            if let lastError = visibleError {
                 Text(lastError)
                     .font(.custom("Avenir Next Medium", size: 12))
                     .foregroundStyle(.red)
