@@ -468,8 +468,16 @@ final class ProxyViewModel: ObservableObject {
       isRunning = false
       statusText = "Stopped"
     } catch {
-      isRunning = false
-      statusText = "Stop failed: \(error.localizedDescription)"
+      let runtimeStillRunning = engine?.isRunning() ?? false
+      isRunning = runtimeStillRunning
+
+      let baseMessage = "Stop failed: \(error.localizedDescription)"
+      if runtimeStillRunning {
+        statusText = "\(baseMessage) (proxy still running)"
+      } else {
+        statusText = baseMessage
+        recoverMacSystemProxyAfterRuntimeFailureIfNeeded(statusPrefix: baseMessage)
+      }
     }
   }
 
@@ -602,6 +610,28 @@ final class ProxyViewModel: ObservableObject {
         statusText = "macOS system proxy disabled"
       } catch {
         statusText = "Disable macOS proxy failed: \(error.localizedDescription)"
+        refreshMacSystemProxyStatus()
+      }
+    }
+  }
+
+  private func recoverMacSystemProxyAfterRuntimeFailureIfNeeded(statusPrefix: String) {
+    guard macSystemProxyEnabled else { return }
+    guard !isApplyingMacSystemProxy else { return }
+
+    let systemProxyService = self.systemProxyService
+    isApplyingMacSystemProxy = true
+
+    Task {
+      defer { isApplyingMacSystemProxy = false }
+      do {
+        let status = try await Task.detached(priority: .userInitiated) {
+          try systemProxyService.disable()
+        }.value
+        applyMacSystemProxyStatus(status)
+        statusText = "\(statusPrefix) (disabled macOS system proxy for recovery)"
+      } catch {
+        statusText = "\(statusPrefix) (failed to disable macOS system proxy: \(error.localizedDescription))"
         refreshMacSystemProxyStatus()
       }
     }

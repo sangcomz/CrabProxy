@@ -530,10 +530,6 @@ final class RustProxyEngine: @unchecked Sendable {
       return
     }
 
-    if FileManager.default.fileExists(atPath: socketPath) {
-      try? FileManager.default.removeItem(atPath: socketPath)
-    }
-
     do {
       _ = try runDetached(
         executablePath: crabdPath,
