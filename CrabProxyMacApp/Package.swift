@@ -42,5 +42,10 @@ let package = Package(
             name: "CrabProxyHelper",
             path: "Sources/CrabProxyHelper"
         ),
+        .testTarget(
+            name: "CrabProxyMacAppTests",
+            dependencies: ["CrabProxyMacApp"],
+            path: "Tests/CrabProxyMacAppTests"
+        ),
     ]
 )

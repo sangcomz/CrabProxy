@@ -82,6 +82,42 @@ enum CAKeyAlgorithm: UInt32 {
   case rsa4096 = 2
 }
 
+protocol ProxyEngineControlling: AnyObject {
+  var onLog: (@Sendable (UInt8, String) -> Void)? { get set }
+
+  func setListenAddress(_ value: String) throws
+  func loadCA(certPath: String, keyPath: String) throws
+  func setInspectEnabled(_ enabled: Bool) throws
+
+  func setThrottleEnabled(_ enabled: Bool) throws
+  func setThrottleLatencyMs(_ latencyMs: UInt64) throws
+  func setThrottleDownstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws
+  func setThrottleUpstreamBytesPerSecond(_ bytesPerSecond: UInt64) throws
+  func setThrottleOnlySelectedHosts(_ enabled: Bool) throws
+  func clearThrottleSelectedHosts() throws
+  func addThrottleSelectedHost(_ matcher: String) throws
+
+  func setClientAllowlistEnabled(_ enabled: Bool) throws
+  func clearClientAllowlist() throws
+  func addClientAllowlistIP(_ ipAddress: String) throws
+
+  func setTransparentEnabled(_ enabled: Bool) throws
+  func setTransparentPort(_ port: UInt16) throws
+
+  func clearRules() throws
+  func clearDaemonLogs() throws
+  func addAllowRule(_ matcher: String) throws
+  func addMapLocalRule(_ rule: MapLocalRuleConfig) throws
+  func addMapRemoteRule(_ rule: MapRemoteRuleConfig) throws
+  func addStatusRewriteRule(_ rule: StatusRewriteRuleConfig) throws
+  func dumpRules() throws -> RuntimeRulesDump
+
+  func start() throws
+  func stop() throws
+  func shutdownDaemon() throws
+  func isRunning() -> Bool
+}
+
 final class RustProxyEngine: @unchecked Sendable {
   var onLog: (@Sendable (UInt8, String) -> Void)? {
     didSet {
@@ -659,6 +695,8 @@ final class RustProxyEngine: @unchecked Sendable {
   }
 #endif
 }
+
+extension RustProxyEngine: ProxyEngineControlling {}
 
 @discardableResult
 private func runDetached(executablePath: String, arguments: [String]) throws -> Process {

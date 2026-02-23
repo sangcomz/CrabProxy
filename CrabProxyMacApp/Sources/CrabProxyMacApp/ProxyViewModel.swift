@@ -215,7 +215,7 @@ final class ProxyViewModel: ObservableObject {
   @Published var mapRemoteRules: [MapRemoteRuleInput] = []
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
 
-  private var engine: RustProxyEngine?
+  private var engine: (any ProxyEngineControlling)?
   private let logStore = ProxyLogStore(maxLogEntries: 800)
   private let ruleManager = ProxyRuleManager()
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
@@ -257,6 +257,7 @@ final class ProxyViewModel: ObservableObject {
   private let systemProxyService: any MacSystemProxyServicing
   let mcpHttpService = MCPHttpService()
   private let clientAppResolver = LocalClientAppResolver(listenPort: 8888)
+  private let engineFactory: (String) throws -> any ProxyEngineControlling
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var pendingClientAppResolutionIDs: Set<ProxyLogEntry.ID> = []
   private var clientAppResolutionAttempts: [ProxyLogEntry.ID: Int] = [:]
@@ -275,11 +276,15 @@ final class ProxyViewModel: ObservableObject {
   init(
     systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService(),
     pfService: any PFServicing = LivePFService(),
-    caCertService: any CACertServicing = LiveCACertService()
+    caCertService: any CACertServicing = LiveCACertService(),
+    engineFactory: @escaping (String) throws -> any ProxyEngineControlling = {
+      try RustProxyEngine(listenAddress: $0)
+    }
   ) {
     self.caCertService = caCertService
     self.pfService = pfService
     self.systemProxyService = systemProxyService
+    self.engineFactory = engineFactory
     allowRules = Self.loadAllowRules()
     mapLocalRules = Self.loadMapLocalRules()
     mapRemoteRules = Self.loadMapRemoteRules()
@@ -1054,8 +1059,8 @@ final class ProxyViewModel: ObservableObject {
     return interceptWasEnabled
   }
 
-  private func makeEngine() throws -> RustProxyEngine {
-    let engine = try RustProxyEngine(listenAddress: listenAddress)
+  private func makeEngine() throws -> any ProxyEngineControlling {
+    let engine = try engineFactory(listenAddress)
     engine.onLog = { [weak self] level, message in
       Task { @MainActor [weak self] in
         self?.appendLog(level: level, message: message)
@@ -1075,7 +1080,7 @@ final class ProxyViewModel: ObservableObject {
     macSystemProxyStateText = status.isEnabled ? "ON • \(status.activeEndpoint)" : "OFF"
   }
 
-  private func syncRules(to engine: RustProxyEngine) throws {
+  private func syncRules(to engine: any ProxyEngineControlling) throws {
     try ruleManager.syncRules(
       to: engine,
       allowRules: allowRules,
@@ -1131,7 +1136,7 @@ final class ProxyViewModel: ObservableObject {
     try startProxyRuntime(interceptEnabled: interceptEnabled)
   }
 
-  private func applyBypassThrottleConfig(to engine: RustProxyEngine) throws {
+  private func applyBypassThrottleConfig(to engine: any ProxyEngineControlling) throws {
     try engine.setThrottleEnabled(false)
     try engine.setThrottleLatencyMs(0)
     try engine.setThrottleDownstreamBytesPerSecond(0)
@@ -1209,7 +1214,7 @@ final class ProxyViewModel: ObservableObject {
       statusRewriteRuleInputs(from: runtimeRules.statusRewrite) + disabledStatusRewriteRules
   }
 
-  private func applyThrottleConfig(to engine: RustProxyEngine) throws {
+  private func applyThrottleConfig(to engine: any ProxyEngineControlling) throws {
     let enabled = throttleEnabled
     let latencyMs = UInt64(Self.normalizedNonNegativeInt(throttleLatencyMs))
     let downstreamKbps = UInt64(Self.normalizedNonNegativeInt(throttleDownstreamKbps))
@@ -1232,7 +1237,7 @@ final class ProxyViewModel: ObservableObject {
     }
   }
 
-  private func applyLANAccessConfig(to engine: RustProxyEngine) throws {
+  private func applyLANAccessConfig(to engine: any ProxyEngineControlling) throws {
     try engine.setClientAllowlistEnabled(allowLANConnections)
     try engine.clearClientAllowlist()
     for ip in lanClientAllowlist {
@@ -1240,7 +1245,7 @@ final class ProxyViewModel: ObservableObject {
     }
   }
 
-  private func ensureInternalCALoaded(engine: RustProxyEngine) throws {
+  private func ensureInternalCALoaded(engine: any ProxyEngineControlling) throws {
     let urls = try internalCAURLs()
     let fm = FileManager.default
     let certExists = fm.fileExists(atPath: urls.cert.path)

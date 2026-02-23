@@ -34,7 +34,7 @@ struct ProxyRuleManager {
     }
 
     func syncRules(
-        to engine: RustProxyEngine,
+        to engine: any ProxyEngineControlling,
         allowRules: [AllowRuleInput],
         mapLocalRules: [MapLocalRuleInput],
         mapRemoteRules: [MapRemoteRuleInput],
