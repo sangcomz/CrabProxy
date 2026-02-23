@@ -215,7 +215,7 @@ final class ProxyViewModel: ObservableObject {
   @Published var mapRemoteRules: [MapRemoteRuleInput] = []
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
 
-  private var engine: (any ProxyEngineControlling)?
+  private let runtimeCoordinator: ProxyRuntimeCoordinator
   private let logStore = ProxyLogStore(maxLogEntries: 800)
   private let ruleManager = ProxyRuleManager()
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
@@ -257,7 +257,6 @@ final class ProxyViewModel: ObservableObject {
   private let systemProxyService: any MacSystemProxyServicing
   let mcpHttpService = MCPHttpService()
   private let clientAppResolver = LocalClientAppResolver(listenPort: 8888)
-  private let engineFactory: (String) throws -> any ProxyEngineControlling
   private var pendingLogEvents: [(level: UInt8, message: String)] = []
   private var pendingClientAppResolutionIDs: Set<ProxyLogEntry.ID> = []
   private var clientAppResolutionAttempts: [ProxyLogEntry.ID: Int] = [:]
@@ -273,6 +272,10 @@ final class ProxyViewModel: ObservableObject {
   private var dismissedLANAccessIPs: Set<String> = []
   private var cancellables: Set<AnyCancellable> = []
 
+  private var engine: (any ProxyEngineControlling)? {
+    runtimeCoordinator.engine
+  }
+
   init(
     systemProxyService: any MacSystemProxyServicing = LiveMacSystemProxyService(),
     pfService: any PFServicing = LivePFService(),
@@ -284,7 +287,7 @@ final class ProxyViewModel: ObservableObject {
     self.caCertService = caCertService
     self.pfService = pfService
     self.systemProxyService = systemProxyService
-    self.engineFactory = engineFactory
+    self.runtimeCoordinator = ProxyRuntimeCoordinator(engineFactory: engineFactory)
     allowRules = Self.loadAllowRules()
     mapLocalRules = Self.loadMapLocalRules()
     mapRemoteRules = Self.loadMapRemoteRules()
@@ -303,7 +306,12 @@ final class ProxyViewModel: ObservableObject {
     refreshMacSystemProxyStatus()
     refreshHelperStatus()
     do {
-      self.engine = try makeEngine()
+      runtimeCoordinator.onLog = { [weak self] level, message in
+        Task { @MainActor [weak self] in
+          self?.appendLog(level: level, message: message)
+        }
+      }
+      try runtimeCoordinator.initializeEngine(listenAddress: listenAddress)
       self.isRunning = self.engine?.isRunning() ?? false
       self.statusText = self.isRunning ? "Running" : "Ready"
     } catch {
@@ -448,7 +456,7 @@ final class ProxyViewModel: ObservableObject {
     }
 
     do {
-      try transitionProxyRuntime(interceptEnabled: true)
+      try transitionProxyRuntime(to: .capture)
       isRunning = true
       statusText = "Running"
     } catch {
@@ -469,7 +477,7 @@ final class ProxyViewModel: ObservableObject {
     }
 
     do {
-      try transitionProxyRuntime(interceptEnabled: false)
+      try transitionProxyRuntime(to: .bypass)
       isRunning = false
       statusText = "Stopped"
     } catch {
@@ -652,11 +660,7 @@ final class ProxyViewModel: ObservableObject {
     Task {
       defer { isApplyingTransparentProxy = false }
       do {
-        let runtimeWasRunning = engine?.isRunning() ?? false
-        let wasInterceptEnabled = isRunning
-        if runtimeWasRunning {
-          try stopProxyRuntimeForReconfigure()
-        }
+        let reconfigureContext = try prepareRuntimeForReconfigure()
 
         guard let engine else {
           transparentProxyEnabled = false
@@ -673,10 +677,7 @@ final class ProxyViewModel: ObservableObject {
           caCertInstalledInKeychain = true
         }
 
-        if runtimeWasRunning {
-          try startProxyRuntime(interceptEnabled: wasInterceptEnabled)
-          isRunning = wasInterceptEnabled
-        }
+        try restoreRuntimeAfterReconfigureIfNeeded(reconfigureContext)
 
         transparentProxyEnabled = true
         transparentProxyStateText = "ON (port \(transparentProxyPort))"
@@ -699,20 +700,13 @@ final class ProxyViewModel: ObservableObject {
       do {
         try await pfService.disable()
 
-        if let engine {
-          let runtimeWasRunning = engine.isRunning()
-          let wasInterceptEnabled = isRunning
-          if runtimeWasRunning {
-            try stopProxyRuntimeForReconfigure()
-          }
+        if engine != nil {
+          let reconfigureContext = try prepareRuntimeForReconfigure()
           guard let activeEngine = self.engine else {
             throw ProxyViewModelError.invalidValue("Engine not initialized")
           }
           try activeEngine.setTransparentEnabled(false)
-          if runtimeWasRunning {
-            try startProxyRuntime(interceptEnabled: wasInterceptEnabled)
-            isRunning = wasInterceptEnabled
-          }
+          try restoreRuntimeAfterReconfigureIfNeeded(reconfigureContext)
         }
 
         transparentProxyEnabled = false
@@ -1046,32 +1040,17 @@ final class ProxyViewModel: ObservableObject {
       try stopProxyRuntimeForReconfigure()
     }
 
-    guard let activeEngine = self.engine else {
-      throw ProxyViewModelError.invalidValue("Engine not initialized")
-    }
-    try syncRules(to: activeEngine)
-
     if interceptWasEnabled {
-      try startProxyRuntime(interceptEnabled: true)
+      try transitionProxyRuntime(to: .capture)
+    } else {
+      guard let activeEngine = self.engine else {
+        throw ProxyViewModelError.invalidValue("Engine not initialized")
+      }
+      try syncRules(to: activeEngine)
     }
 
     isRunning = interceptWasEnabled
     return interceptWasEnabled
-  }
-
-  private func makeEngine() throws -> any ProxyEngineControlling {
-    let engine = try engineFactory(listenAddress)
-    engine.onLog = { [weak self] level, message in
-      Task { @MainActor [weak self] in
-        self?.appendLog(level: level, message: message)
-      }
-    }
-    return engine
-  }
-
-  private func recreateEngine() throws {
-    engine = nil
-    engine = try makeEngine()
   }
 
   private func applyMacSystemProxyStatus(_ status: MacSystemProxyStatus) {
@@ -1091,28 +1070,40 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func stopProxyRuntimeForReconfigure() throws {
-    guard let engine else {
-      throw ProxyViewModelError.invalidValue("Engine not initialized")
-    }
-    if engine.isRunning() {
-      try engine.stop()
-    }
-    try recreateEngine()
+    try runtimeCoordinator.stopRuntimeForReconfigure(listenAddress: listenAddress)
   }
 
-  private func startProxyRuntime(interceptEnabled: Bool) throws {
-    guard let engine else {
-      throw ProxyViewModelError.invalidValue("Engine not initialized")
-    }
+  private func prepareRuntimeForReconfigure() throws -> ProxyRuntimeCoordinator.ReconfigureContext {
+    try runtimeCoordinator.prepareForReconfigure(
+      captureEnabled: isRunning,
+      listenAddress: listenAddress
+    )
+  }
 
-    try engine.setListenAddress(listenAddress)
+  private func restoreRuntimeAfterReconfigureIfNeeded(
+    _ context: ProxyRuntimeCoordinator.ReconfigureContext
+  ) throws {
+    try runtimeCoordinator.restoreAfterReconfigureIfNeeded(
+      context,
+      listenAddress: listenAddress,
+      configure: { [self] engine, mode in
+        try applyRuntimeModeConfiguration(to: engine, mode: mode)
+      }
+    )
+    isRunning = context.captureWasEnabled
+  }
+
+  private func applyRuntimeModeConfiguration(
+    to engine: any ProxyEngineControlling,
+    mode: ProxyRuntimeCoordinator.Mode
+  ) throws {
     try applyLANAccessConfig(to: engine)
     if transparentProxyEnabled {
       try engine.setTransparentEnabled(true)
       try engine.setTransparentPort(transparentProxyPort)
     }
 
-    if interceptEnabled {
+    if mode.capturesTraffic {
       try engine.setInspectEnabled(inspectBodies)
       try applyThrottleConfig(to: engine)
       try syncRules(to: engine)
@@ -1123,17 +1114,16 @@ final class ProxyViewModel: ObservableObject {
       try engine.clearRules()
     }
 
-    try engine.start()
   }
 
-  private func transitionProxyRuntime(interceptEnabled: Bool) throws {
-    guard let engine else {
-      throw ProxyViewModelError.invalidValue("Engine not initialized")
-    }
-    if engine.isRunning() {
-      try stopProxyRuntimeForReconfigure()
-    }
-    try startProxyRuntime(interceptEnabled: interceptEnabled)
+  private func transitionProxyRuntime(to mode: ProxyRuntimeCoordinator.Mode) throws {
+    try runtimeCoordinator.transitionRuntime(
+      to: mode,
+      listenAddress: listenAddress,
+      configure: { [self] engine, mode in
+        try applyRuntimeModeConfiguration(to: engine, mode: mode)
+      }
+    )
   }
 
   private func applyBypassThrottleConfig(to engine: any ProxyEngineControlling) throws {
@@ -1639,12 +1629,10 @@ final class ProxyViewModel: ObservableObject {
     pendingLANAccessRequestIP = nil
   }
 
-  private func applyAllowLANConnectionsIfRunning(oldValue: Bool) {
-    guard oldValue != allowLANConnections else { return }
+  private func scheduleCaptureRestartIfRunning(taskSlot: inout Task<Void, Never>?) {
     guard isRunning else { return }
-    listenAddressApplyTask?.cancel()
-
-    listenAddressApplyTask = Task { @MainActor [weak self] in
+    taskSlot?.cancel()
+    taskSlot = Task { @MainActor [weak self] in
       await Task.yield()
       guard let self else { return }
       guard !Task.isCancelled else { return }
@@ -1656,44 +1644,21 @@ final class ProxyViewModel: ObservableObject {
 
       self.startProxy()
     }
+  }
+
+  private func applyAllowLANConnectionsIfRunning(oldValue: Bool) {
+    guard oldValue != allowLANConnections else { return }
+    scheduleCaptureRestartIfRunning(taskSlot: &listenAddressApplyTask)
   }
 
   private func applyLANClientAllowlistIfRunning(oldValue: [String]) {
     guard oldValue != lanClientAllowlist else { return }
-    guard isRunning else { return }
-    lanClientAllowlistApplyTask?.cancel()
-
-    lanClientAllowlistApplyTask = Task { @MainActor [weak self] in
-      await Task.yield()
-      guard let self else { return }
-      guard !Task.isCancelled else { return }
-      guard self.isRunning else { return }
-
-      self.stopProxy()
-      guard !Task.isCancelled else { return }
-      guard !self.isRunning else { return }
-
-      self.startProxy()
-    }
+    scheduleCaptureRestartIfRunning(taskSlot: &lanClientAllowlistApplyTask)
   }
 
   private func applyInspectBodiesIfRunning(oldValue: Bool) {
     guard oldValue != inspectBodies else { return }
-    guard isRunning else { return }
-    inspectBodiesApplyTask?.cancel()
-
-    inspectBodiesApplyTask = Task { @MainActor [weak self] in
-      await Task.yield()
-      guard let self else { return }
-      guard !Task.isCancelled else { return }
-      guard self.isRunning else { return }
-
-      self.stopProxy()
-      guard !Task.isCancelled else { return }
-      guard !self.isRunning else { return }
-
-      self.startProxy()
-    }
+    scheduleCaptureRestartIfRunning(taskSlot: &inspectBodiesApplyTask)
   }
 
   private func applyThrottleIfRunning(oldValue: Bool) {
@@ -1733,21 +1698,7 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func scheduleThrottleApplyIfRunning() {
-    guard isRunning else { return }
-    throttleApplyTask?.cancel()
-
-    throttleApplyTask = Task { @MainActor [weak self] in
-      await Task.yield()
-      guard let self else { return }
-      guard !Task.isCancelled else { return }
-      guard self.isRunning else { return }
-
-      self.stopProxy()
-      guard !Task.isCancelled else { return }
-      guard !self.isRunning else { return }
-
-      self.startProxy()
-    }
+    scheduleCaptureRestartIfRunning(taskSlot: &throttleApplyTask)
   }
 
   private func scheduleLogFlushIfNeeded() {
