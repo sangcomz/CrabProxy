@@ -56,14 +56,14 @@ final class ProxyRuntimeCoordinator {
     guard let engine else {
       throw ProxyRuntimeCoordinatorError.engineNotInitialized
     }
-    if engine.isRunning() {
+    if engine.isProxyRunning() {
       try stopRuntimeForReconfigure(listenAddress: listenAddress)
     }
     try startRuntime(mode: mode, listenAddress: listenAddress, configure: configure)
   }
 
   func prepareForReconfigure(captureEnabled: Bool, listenAddress: String) throws -> ReconfigureContext {
-    let runtimeWasRunning = engine?.isRunning() ?? false
+    let runtimeWasRunning = engine?.isProxyRunning() ?? false
     if runtimeWasRunning {
       try stopRuntimeForReconfigure(listenAddress: listenAddress)
     }
@@ -87,8 +87,8 @@ final class ProxyRuntimeCoordinator {
     guard let engine else {
       throw ProxyRuntimeCoordinatorError.engineNotInitialized
     }
-    if engine.isRunning() {
-      try engine.stop()
+    if engine.isProxyRunning() {
+      try engine.stopProxyRuntime()
     }
     self.engine = try makeEngine(listenAddress: listenAddress)
   }
@@ -104,7 +104,12 @@ final class ProxyRuntimeCoordinator {
 
     try engine.setListenAddress(listenAddress)
     try configure(engine, mode)
-    try engine.start()
+    try engine.startProxyRuntime()
+    if mode.capturesTraffic {
+      try engine.startCaptureRecording()
+    } else {
+      try engine.stopCaptureRecording()
+    }
   }
 
   private func makeEngine(listenAddress: String) throws -> any ProxyEngineControlling {

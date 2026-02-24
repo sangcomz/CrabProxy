@@ -238,23 +238,24 @@ struct ContentView: View {
                 Spacer()
 
                 ActionButton(
-                    title: "Start",
+                    title: "Start Capture",
                     icon: "play.fill",
                     tint: primaryTint
                 ) {
-                    model.startProxy()
+                    model.startCapture()
                 }
-                .disabled(model.isRunning)
+                .disabled(model.isCaptureEnabled)
 
                 ActionButton(
-                    title: "Stop",
+                    title: "Stop Capture",
                     icon: "stop.fill",
                     tint: destructiveTint
                 ) {
-                    model.stopProxy()
+                    model.stopCapture()
                 }
-                .disabled(!model.isRunning)
+                .disabled(!model.isCaptureEnabled)
             }
+
         }
         .padding(16)
         .background(GlassCard())
@@ -855,11 +856,11 @@ struct ContentView: View {
         }
     }
 
-    private func toggleProxyRunState() {
-        if model.isRunning {
-            model.stopProxy()
+    private func toggleCaptureRunState() {
+        if model.isCaptureEnabled {
+            model.stopCapture()
         } else {
-            model.startProxy()
+            model.startCapture()
         }
     }
 
@@ -875,8 +876,8 @@ struct ContentView: View {
             }
             .keyboardShortcut("k", modifiers: [.command, .shift])
 
-            Button("Toggle Proxy") {
-                toggleProxyRunState()
+            Button("Toggle Capture") {
+                toggleCaptureRunState()
             }
             .keyboardShortcut("r", modifiers: [.command])
         }
@@ -917,6 +918,7 @@ struct ContentView: View {
         }
         return "\(prefix)\nCRAB_JSON\n\(prettyJSON)"
     }
+
 }
 
 private enum MainScreen: String {

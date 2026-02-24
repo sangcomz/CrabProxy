@@ -76,6 +76,38 @@ struct RuntimeRulesDump: Equatable {
   var statusRewrite: [StatusRewriteEntry]
 }
 
+struct RuntimeEngineConfigDump: Equatable {
+  struct InspectConfig: Equatable {
+    var enabled: Bool
+  }
+
+  struct ThrottleConfig: Equatable {
+    var enabled: Bool
+    var latencyMs: UInt64
+    var downstreamBytesPerSecond: UInt64
+    var upstreamBytesPerSecond: UInt64
+    var onlySelectedHosts: Bool
+    var selectedHosts: [String]
+  }
+
+  struct ClientAllowlistConfig: Equatable {
+    var enabled: Bool
+    var ips: [String]
+  }
+
+  struct TransparentConfig: Equatable {
+    var enabled: Bool
+    var listenPort: UInt16
+  }
+
+  var running: Bool
+  var listenAddress: String
+  var inspect: InspectConfig
+  var throttle: ThrottleConfig
+  var clientAllowlist: ClientAllowlistConfig
+  var transparent: TransparentConfig
+}
+
 enum CAKeyAlgorithm: UInt32 {
   case ecdsaP256 = 0
   case rsa2048 = 1
@@ -111,11 +143,15 @@ protocol ProxyEngineControlling: AnyObject {
   func addMapRemoteRule(_ rule: MapRemoteRuleConfig) throws
   func addStatusRewriteRule(_ rule: StatusRewriteRuleConfig) throws
   func dumpRules() throws -> RuntimeRulesDump
+  func dumpConfig() throws -> RuntimeEngineConfigDump
 
-  func start() throws
-  func stop() throws
+  func startProxyRuntime() throws
+  func stopProxyRuntime() throws
+  func startCaptureRecording() throws
+  func stopCaptureRecording() throws
   func shutdownDaemon() throws
-  func isRunning() -> Bool
+  func isProxyRunning() -> Bool
+  func isCaptureRunning() -> Bool
 }
 
 final class RustProxyEngine: @unchecked Sendable {
@@ -364,14 +400,42 @@ final class RustProxyEngine: @unchecked Sendable {
     return try parseRuntimeRulesDump(raw)
   }
 
-  func start() throws {
+  func dumpConfig() throws -> RuntimeEngineConfigDump {
+    let raw = try invokeRPC(method: "engine.config_dump", params: [:], ensureDaemon: false)
+    return try parseRuntimeConfigDump(raw)
+  }
+
+  func startProxyRuntime() throws {
     _ = try invokeRPC(method: "proxy.start", params: [:])
     startLogStreamingIfNeeded()
   }
 
-  func stop() throws {
+  func stopProxyRuntime() throws {
     stopLogStreaming()
     _ = try invokeRPC(method: "proxy.stop", params: [:], ensureDaemon: false)
+  }
+
+  func startCaptureRecording() throws {
+    do {
+      _ = try invokeRPC(method: "capture.start", params: [:], ensureDaemon: false)
+    } catch {
+      if isMissingCaptureRPC(error) {
+        // Older daemons don't expose capture.* yet. Keep legacy behavior compatible.
+        return
+      }
+      throw error
+    }
+  }
+
+  func stopCaptureRecording() throws {
+    do {
+      _ = try invokeRPC(method: "capture.stop", params: [:], ensureDaemon: false)
+    } catch {
+      if isMissingCaptureRPC(error) {
+        return
+      }
+      throw error
+    }
   }
 
   func shutdownDaemon() throws {
@@ -380,7 +444,7 @@ final class RustProxyEngine: @unchecked Sendable {
     _ = try invokeRPC(method: "system.shutdown", params: [:], ensureDaemon: false)
   }
 
-  func isRunning() -> Bool {
+  func isProxyRunning() -> Bool {
     do {
       let raw = try invokeRPC(method: "proxy.status", params: [:], ensureDaemon: false)
       guard let payload = raw as? [String: Any], let status = payload["status"] as? String else {
@@ -388,6 +452,21 @@ final class RustProxyEngine: @unchecked Sendable {
       }
       return status == "running"
     } catch {
+      return false
+    }
+  }
+
+  func isCaptureRunning() -> Bool {
+    do {
+      let raw = try invokeRPC(method: "capture.status", params: [:], ensureDaemon: false)
+      guard let payload = raw as? [String: Any], let status = payload["status"] as? String else {
+        return false
+      }
+      return status == "running"
+    } catch {
+      if isMissingCaptureRPC(error) {
+        return isProxyRunning()
+      }
       return false
     }
   }
@@ -535,6 +614,114 @@ final class RustProxyEngine: @unchecked Sendable {
     )
   }
 
+  private func parseRuntimeConfigDump(_ raw: Any) throws -> RuntimeEngineConfigDump {
+    guard let payload = raw as? [String: Any] else {
+      throw RustProxyError.internalState("engine.config_dump returned invalid payload")
+    }
+
+    let running = try boolValue(payload["running"], key: "running")
+    let listenAddress = try stringValue(payload["listen_addr"], key: "listen_addr")
+
+    guard let inspectObject = payload["inspect"] as? [String: Any] else {
+      throw RustProxyError.internalState("engine.config_dump inspect is missing")
+    }
+    guard let throttleObject = payload["throttle"] as? [String: Any] else {
+      throw RustProxyError.internalState("engine.config_dump throttle is missing")
+    }
+    guard let clientAllowlistObject = payload["client_allowlist"] as? [String: Any] else {
+      throw RustProxyError.internalState("engine.config_dump client_allowlist is missing")
+    }
+    guard let transparentObject = payload["transparent"] as? [String: Any] else {
+      throw RustProxyError.internalState("engine.config_dump transparent is missing")
+    }
+
+    let inspect = RuntimeEngineConfigDump.InspectConfig(
+      enabled: try boolValue(inspectObject["enabled"], key: "inspect.enabled")
+    )
+
+    let throttle = RuntimeEngineConfigDump.ThrottleConfig(
+      enabled: try boolValue(throttleObject["enabled"], key: "throttle.enabled"),
+      latencyMs: try uint64Value(throttleObject["latency_ms"], key: "throttle.latency_ms"),
+      downstreamBytesPerSecond: try uint64Value(
+        throttleObject["downstream_bps"],
+        key: "throttle.downstream_bps"
+      ),
+      upstreamBytesPerSecond: try uint64Value(
+        throttleObject["upstream_bps"],
+        key: "throttle.upstream_bps"
+      ),
+      onlySelectedHosts: try boolValue(
+        throttleObject["only_selected_hosts"],
+        key: "throttle.only_selected_hosts"
+      ),
+      selectedHosts: (throttleObject["selected_hosts"] as? [Any] ?? []).compactMap { $0 as? String }
+    )
+
+    let clientAllowlist = RuntimeEngineConfigDump.ClientAllowlistConfig(
+      enabled: try boolValue(clientAllowlistObject["enabled"], key: "client_allowlist.enabled"),
+      ips: (clientAllowlistObject["ips"] as? [Any] ?? []).compactMap { $0 as? String }
+    )
+
+    let transparent = RuntimeEngineConfigDump.TransparentConfig(
+      enabled: try boolValue(transparentObject["enabled"], key: "transparent.enabled"),
+      listenPort: try uint16Value(transparentObject["listen_port"], key: "transparent.listen_port")
+    )
+
+    return RuntimeEngineConfigDump(
+      running: running,
+      listenAddress: listenAddress,
+      inspect: inspect,
+      throttle: throttle,
+      clientAllowlist: clientAllowlist,
+      transparent: transparent
+    )
+  }
+
+  private func stringValue(_ raw: Any?, key: String) throws -> String {
+    if let value = raw as? String {
+      return value
+    }
+    if let number = raw as? NSNumber {
+      return number.stringValue
+    }
+    throw RustProxyError.internalState("engine.config_dump \(key) is invalid")
+  }
+
+  private func boolValue(_ raw: Any?, key: String) throws -> Bool {
+    if let value = raw as? Bool {
+      return value
+    }
+    if let number = raw as? NSNumber {
+      return number.boolValue
+    }
+    if let value = raw as? String {
+      let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if normalized == "true" || normalized == "1" { return true }
+      if normalized == "false" || normalized == "0" { return false }
+    }
+    throw RustProxyError.internalState("engine.config_dump \(key) is invalid")
+  }
+
+  private func uint64Value(_ raw: Any?, key: String) throws -> UInt64 {
+    if let number = raw as? NSNumber {
+      return number.uint64Value
+    }
+    if let value = raw as? String,
+       let parsed = UInt64(value.trimmingCharacters(in: .whitespacesAndNewlines))
+    {
+      return parsed
+    }
+    throw RustProxyError.internalState("engine.config_dump \(key) is invalid")
+  }
+
+  private func uint16Value(_ raw: Any?, key: String) throws -> UInt16 {
+    let value = try uint64Value(raw, key: key)
+    guard value <= UInt64(UInt16.max) else {
+      throw RustProxyError.internalState("engine.config_dump \(key) is out of range")
+    }
+    return UInt16(value)
+  }
+
   private func throwIfRPCError(_ response: [String: Any]) throws {
     guard let errorPayload = response["error"] as? [String: Any] else {
       return
@@ -543,6 +730,13 @@ final class RustProxyEngine: @unchecked Sendable {
     let code = (errorPayload["code"] as? NSNumber)?.intValue ?? -1
     let message = (errorPayload["message"] as? String) ?? "Unknown RPC error"
     throw RustProxyError.internalState("RPC error(\(code)): \(message)")
+  }
+
+  private func isMissingCaptureRPC(_ error: Error) -> Bool {
+    guard case let RustProxyError.internalState(message) = error else {
+      return false
+    }
+    return message.contains("unknown method: capture.")
   }
 
   private func readToken() throws -> String {

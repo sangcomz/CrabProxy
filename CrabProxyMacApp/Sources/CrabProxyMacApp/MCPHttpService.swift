@@ -42,6 +42,11 @@ final class MCPHttpService: ObservableObject {
       let crabdPath = try Self.resolveExecutable(named: "crabd")
       let mcpPath = try Self.resolveExecutable(named: "crab-mcp")
 
+      // If the app was relaunched or lost state, stale crab-mcp instances can remain
+      // and force a fallback port (3848+). Clean matching HTTP servers first so the
+      // new process owns the configured port and token lifecycle.
+      try Self.terminateConflictingHTTPServers(socketPath: socketPath, tokenPath: tokenPath)
+
       let process = Process()
       process.executableURL = URL(fileURLWithPath: mcpPath)
 
@@ -250,5 +255,90 @@ final class MCPHttpService: ObservableObject {
     }
 
     throw MCPHttpServiceError.executableMissing(name)
+  }
+
+  private static func terminateConflictingHTTPServers(
+    socketPath: String,
+    tokenPath: String
+  ) throws {
+    let pids = try findMatchingHTTPServerPIDs(socketPath: socketPath, tokenPath: tokenPath)
+    guard !pids.isEmpty else { return }
+
+    for pid in pids {
+      _ = Darwin.kill(pid, SIGTERM)
+    }
+
+    let deadline = Date().addingTimeInterval(1.5)
+    while Date() < deadline {
+      let alive = pids.contains { isProcessAlive($0) }
+      if !alive {
+        break
+      }
+      RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+    }
+
+    for pid in pids where isProcessAlive(pid) {
+      _ = Darwin.kill(pid, SIGKILL)
+    }
+  }
+
+  private static func findMatchingHTTPServerPIDs(
+    socketPath: String,
+    tokenPath: String
+  ) throws -> [pid_t] {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/ps")
+    process.arguments = ["-axo", "pid=,command="]
+
+    let stdout = Pipe()
+    process.standardOutput = stdout
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+
+    // Drain stdout before waiting. Waiting first can deadlock if `ps` output fills the pipe
+    // buffer, which would freeze the UI because `start()` runs on the main actor.
+    let data = stdout.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    guard process.terminationStatus == 0 else {
+      throw NSError(
+        domain: "MCPHttpService",
+        code: Int(process.terminationStatus),
+        userInfo: [NSLocalizedDescriptionKey: "ps failed with status \(process.terminationStatus)"]
+      )
+    }
+
+    let text = String(data: data, encoding: .utf8) ?? ""
+    if text.isEmpty { return [] }
+
+    let socketMarker = "--socket \(socketPath)"
+    let tokenMarker = "--token-path \(tokenPath)"
+
+    return text
+      .split(whereSeparator: \.isNewline)
+      .compactMap { rawLine in
+        let line = rawLine.trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty else { return nil }
+        guard let split = line.firstIndex(where: \.isWhitespace) else { return nil }
+
+        let pidText = line[..<split]
+        let commandStart = line[split...].drop(while: \.isWhitespace)
+        let command = String(commandStart)
+        guard command.contains("crab-mcp") else { return nil }
+        guard command.contains("--transport http") else { return nil }
+        guard command.contains("--principal mcp") else { return nil }
+        guard command.contains(socketMarker) else { return nil }
+        guard command.contains(tokenMarker) else { return nil }
+
+        return pid_t(pidText) ?? 0
+      }
+      .filter { $0 > 0 }
+  }
+
+  private static func isProcessAlive(_ pid: pid_t) -> Bool {
+    if Darwin.kill(pid, 0) == 0 {
+      return true
+    }
+    return errno == EPERM
   }
 }

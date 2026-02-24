@@ -53,14 +53,11 @@ struct CrabProxyMacApp: App {
 
         MenuBarExtra {
             VStack(alignment: .leading, spacing: 8) {
-                Text(model.isRunning ? "Proxy is running" : "Proxy is stopped")
-                    .font(.system(size: 12, weight: .semibold))
-
-                Button(model.isRunning ? "Stop Proxy" : "Start Proxy") {
-                    if model.isRunning {
-                        model.stopProxy()
+                Button(model.isCaptureEnabled ? "Stop Capture" : "Start Capture") {
+                    if model.isCaptureEnabled {
+                        model.stopCapture()
                     } else {
-                        model.startProxy()
+                        model.startCapture()
                     }
                 }
 
@@ -125,6 +122,7 @@ struct CrabProxyMacApp: App {
         settingsTabRawValue = "General"
         currentScreenRawValue = "traffic"
         model.clearLogs(showStatus: false)
+        model.ensureProxyRuntimeReadyInBypassMode()
     }
 
     @MainActor

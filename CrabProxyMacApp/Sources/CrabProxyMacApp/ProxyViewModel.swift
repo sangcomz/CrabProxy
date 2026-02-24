@@ -184,8 +184,9 @@ final class ProxyViewModel: ObservableObject {
       applyThrottleSelectedHostsIfRunning(oldValue: oldValue)
     }
   }
-  @Published var isRunning = false
-  @Published var statusText = "Stopped"
+  @Published private(set) var isCaptureEnabled = false
+  @Published private(set) var isRuntimeRunning = false
+  @Published var statusText = ProxyViewModel.proxyStoppedStatusSummary
   @Published var visibleURLFilter = "" {
     didSet { rebuildFilteredLogs() }
   }
@@ -237,6 +238,8 @@ final class ProxyViewModel: ObservableObject {
   private let internalCADays: UInt32 = 3650
   private let logFlushIntervalNanoseconds: UInt64 = 50_000_000
   private let runtimeRulesSyncIntervalNanoseconds: UInt64 = 1_000_000_000
+  private let runtimeConfigSyncIntervalNanoseconds: UInt64 = 1_000_000_000
+  private let runtimeStatusSyncIntervalNanoseconds: UInt64 = 700_000_000
   private let transparentProxyPort: UInt16 = 8889
   private let clientAppResolutionBatchSize = 24
   private let maxClientAppResolutionAttempts = 2
@@ -268,12 +271,44 @@ final class ProxyViewModel: ObservableObject {
   private var inspectBodiesApplyTask: Task<Void, Never>?
   private var throttleApplyTask: Task<Void, Never>?
   private var runtimeRulesSyncTask: Task<Void, Never>?
+  private var runtimeConfigSyncTask: Task<Void, Never>?
+  private var runtimeStatusSyncTask: Task<Void, Never>?
+  private var runtimeBootstrapTask: Task<Void, Never>?
   private var pendingLANAccessQueue: [String] = []
   private var dismissedLANAccessIPs: Set<String> = []
   private var cancellables: Set<AnyCancellable> = []
+  private var lastObservedRuntimeRunning: Bool?
+  private var lastObservedCaptureRunning: Bool?
+  private var lastObservedRuntimeRulesDump: RuntimeRulesDump?
+  private var lastObservedRuntimeConfigDump: RuntimeEngineConfigDump?
+  private var suppressExternalRuntimeConfigApply = false
 
   private var engine: (any ProxyEngineControlling)? {
     runtimeCoordinator.engine
+  }
+
+  private static let proxyReadyStatusSummary = "Proxy ready • Capture stopped"
+  private static let proxyStoppedStatusSummary = "Proxy stopped • Capture stopped"
+  private static let proxyRunningCaptureOnStatusSummary = "Proxy running • Capture running"
+  private static let proxyRunningCaptureOffStatusSummary = "Proxy running • Capture stopped"
+
+  private static func runtimeStatusSummary(proxyRunning: Bool, captureRunning: Bool) -> String {
+    if !proxyRunning {
+      return proxyStoppedStatusSummary
+    }
+    return captureRunning ? proxyRunningCaptureOnStatusSummary : proxyRunningCaptureOffStatusSummary
+  }
+
+  private static func isRuntimeStatusSummary(_ value: String) -> Bool {
+    switch value {
+    case proxyReadyStatusSummary,
+         proxyStoppedStatusSummary,
+         proxyRunningCaptureOnStatusSummary,
+         proxyRunningCaptureOffStatusSummary:
+      return true
+    default:
+      return false
+    }
   }
 
   init(
@@ -312,11 +347,20 @@ final class ProxyViewModel: ObservableObject {
         }
       }
       try runtimeCoordinator.initializeEngine(listenAddress: listenAddress)
-      self.isRunning = self.engine?.isRunning() ?? false
-      self.statusText = self.isRunning ? "Running" : "Ready"
+      let runtimeRunning = self.engine?.isProxyRunning() ?? false
+      let captureRunning = runtimeRunning ? (self.engine?.isCaptureRunning() ?? false) : false
+      self.isRuntimeRunning = runtimeRunning
+      self.isCaptureEnabled = captureRunning
+      self.lastObservedRuntimeRunning = runtimeRunning
+      self.lastObservedCaptureRunning = captureRunning
+      self.statusText = runtimeRunning
+        ? Self.runtimeStatusSummary(proxyRunning: runtimeRunning, captureRunning: captureRunning)
+        : Self.proxyReadyStatusSummary
     } catch {
       self.statusText = "Init failed: \(error.localizedDescription)"
     }
+    startRuntimeConfigSync()
+    startRuntimeStatusSync()
     rebuildFilteredLogs()
   }
 
@@ -327,6 +371,9 @@ final class ProxyViewModel: ObservableObject {
     inspectBodiesApplyTask?.cancel()
     throttleApplyTask?.cancel()
     runtimeRulesSyncTask?.cancel()
+    runtimeConfigSyncTask?.cancel()
+    runtimeStatusSyncTask?.cancel()
+    runtimeBootstrapTask?.cancel()
   }
 
   var selectedLog: ProxyLogEntry? {
@@ -443,34 +490,38 @@ final class ProxyViewModel: ObservableObject {
     advancePendingLANAccessPromptIfNeeded()
   }
 
-  func startProxy() {
+  func startCapture() {
     guard let engine else {
       statusText = "Engine not initialized"
       return
     }
 
-    if engine.isRunning() && isRunning {
-      isRunning = true
-      statusText = "Running"
+    if engine.isProxyRunning() && isCaptureEnabled {
+      isRuntimeRunning = true
+      isCaptureEnabled = true
+      statusText = Self.runtimeStatusSummary(proxyRunning: true, captureRunning: true)
       return
     }
 
     do {
       try transitionProxyRuntime(to: .capture)
-      isRunning = true
-      statusText = "Running"
+      isRuntimeRunning = true
+      isCaptureEnabled = true
+      statusText = Self.runtimeStatusSummary(proxyRunning: true, captureRunning: true)
     } catch {
-      isRunning = false
+      let runtimeStillRunning = self.engine?.isProxyRunning() ?? false
+      isRuntimeRunning = runtimeStillRunning
+      isCaptureEnabled = runtimeStillRunning ? (self.engine?.isCaptureRunning() ?? false) : false
       let nsError = error as NSError
       if let filePath = nsError.userInfo[NSFilePathErrorKey] as? String {
-        statusText = "Start failed: \(error.localizedDescription) (\(filePath))"
+        statusText = "Start capture failed: \(error.localizedDescription) (\(filePath))"
       } else {
-        statusText = "Start failed: \(error.localizedDescription) [\(nsError.domain):\(nsError.code)]"
+        statusText = "Start capture failed: \(error.localizedDescription) [\(nsError.domain):\(nsError.code)]"
       }
     }
   }
 
-  func stopProxy() {
+  func stopCapture() {
     guard engine != nil else {
       statusText = "Engine not initialized"
       return
@@ -478,18 +529,57 @@ final class ProxyViewModel: ObservableObject {
 
     do {
       try transitionProxyRuntime(to: .bypass)
-      isRunning = false
-      statusText = "Stopped"
+      isRuntimeRunning = true
+      isCaptureEnabled = false
+      statusText = Self.runtimeStatusSummary(proxyRunning: true, captureRunning: false)
     } catch {
-      let runtimeStillRunning = engine?.isRunning() ?? false
-      isRunning = runtimeStillRunning
+      let runtimeStillRunning = engine?.isProxyRunning() ?? false
+      isRuntimeRunning = runtimeStillRunning
+      if !runtimeStillRunning {
+        isCaptureEnabled = false
+      } else {
+        isCaptureEnabled = engine?.isCaptureRunning() ?? false
+      }
 
-      let baseMessage = "Stop failed: \(error.localizedDescription)"
+      let baseMessage = "Stop capture failed: \(error.localizedDescription)"
       if runtimeStillRunning {
-        statusText = "\(baseMessage) (proxy still running)"
+        let captureState = isCaptureEnabled ? "capture still running" : "capture stopped"
+        statusText = "\(baseMessage) (proxy still running; \(captureState))"
       } else {
         statusText = baseMessage
         recoverMacSystemProxyAfterRuntimeFailureIfNeeded(statusPrefix: baseMessage)
+      }
+    }
+  }
+
+  func ensureProxyRuntimeReadyInBypassMode() {
+    guard runtimeBootstrapTask == nil else { return }
+    runtimeBootstrapTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.runtimeBootstrapTask = nil }
+
+      guard let engine else { return }
+      if engine.isProxyRunning() {
+        self.isRuntimeRunning = true
+        self.isCaptureEnabled = engine.isCaptureRunning()
+        return
+      }
+
+      do {
+        try self.transitionProxyRuntime(to: .bypass)
+        self.isRuntimeRunning = true
+        self.isCaptureEnabled = false
+        if Self.isRuntimeStatusSummary(self.statusText) {
+          self.statusText = Self.runtimeStatusSummary(proxyRunning: true, captureRunning: false)
+        }
+      } catch {
+        let runtimeStillRunning = self.engine?.isProxyRunning() ?? false
+        self.isRuntimeRunning = runtimeStillRunning
+        if !runtimeStillRunning {
+          self.isCaptureEnabled = false
+        } else {
+          self.isCaptureEnabled = self.engine?.isCaptureRunning() ?? false
+        }
       }
     }
   }
@@ -506,10 +596,11 @@ final class ProxyViewModel: ObservableObject {
       try engine.shutdownDaemon()
     } catch {
       // Best-effort fallback: at least stop active proxy task if daemon shutdown RPC fails.
-      try? engine.stop()
+      try? engine.stopProxyRuntime()
     }
 
-    isRunning = false
+    isCaptureEnabled = false
+    isRuntimeRunning = false
   }
 
   func clearLogs(showStatus: Bool = true) {
@@ -848,7 +939,7 @@ final class ProxyViewModel: ObservableObject {
   }
 
   func regenerateInternalCA() {
-    guard !isRunning else {
+    guard !isCaptureEnabled else {
       statusText = "Stop proxy before regenerating CA"
       return
     }
@@ -1018,7 +1109,13 @@ final class ProxyViewModel: ObservableObject {
       let runtimeWasRunning = try applyRulesToEngineAfterSave()
       statusText = runtimeWasRunning ? "Rules saved and applied" : "Rules saved"
     } catch {
-      isRunning = engine?.isRunning() ?? false
+      let runtimeStillRunning = engine?.isProxyRunning() ?? false
+      isRuntimeRunning = runtimeStillRunning
+      if !runtimeStillRunning {
+        isCaptureEnabled = false
+      } else {
+        isCaptureEnabled = engine?.isCaptureRunning() ?? false
+      }
       statusText = "Save failed: \(error.localizedDescription)"
     }
   }
@@ -1028,8 +1125,8 @@ final class ProxyViewModel: ObservableObject {
       return false
     }
 
-    let interceptWasEnabled = isRunning
-    let runtimeIsActive = engine.isRunning()
+    let interceptWasEnabled = isCaptureEnabled
+    let runtimeIsActive = engine.isProxyRunning()
     if runtimeIsActive && !interceptWasEnabled {
       // Bypass mode keeps the proxy server alive with runtime rules intentionally cleared.
       // Persist the UI rules but defer applying them until intercept mode is enabled again.
@@ -1049,7 +1146,8 @@ final class ProxyViewModel: ObservableObject {
       try syncRules(to: activeEngine)
     }
 
-    isRunning = interceptWasEnabled
+    isCaptureEnabled = interceptWasEnabled
+    isRuntimeRunning = engine.isProxyRunning()
     return interceptWasEnabled
   }
 
@@ -1075,7 +1173,7 @@ final class ProxyViewModel: ObservableObject {
 
   private func prepareRuntimeForReconfigure() throws -> ProxyRuntimeCoordinator.ReconfigureContext {
     try runtimeCoordinator.prepareForReconfigure(
-      captureEnabled: isRunning,
+      captureEnabled: isCaptureEnabled,
       listenAddress: listenAddress
     )
   }
@@ -1090,7 +1188,8 @@ final class ProxyViewModel: ObservableObject {
         try applyRuntimeModeConfiguration(to: engine, mode: mode)
       }
     )
-    isRunning = context.captureWasEnabled
+    isCaptureEnabled = context.captureWasEnabled
+    isRuntimeRunning = context.runtimeWasRunning
   }
 
   private func applyRuntimeModeConfiguration(
@@ -1148,6 +1247,154 @@ final class ProxyViewModel: ObservableObject {
     runtimeRulesSyncTask = nil
   }
 
+  private func startRuntimeConfigSync() {
+    guard runtimeConfigSyncTask == nil else { return }
+    runtimeConfigSyncTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.runRuntimeConfigSyncLoop()
+    }
+  }
+
+  private func runRuntimeConfigSyncLoop() async {
+    refreshRuntimeConfigFromDaemonIfChanged()
+    if runtimeRulesSyncTask == nil {
+      refreshRulesFromRuntimeIfChanged()
+    }
+
+    while !Task.isCancelled {
+      do {
+        try await Task.sleep(nanoseconds: runtimeConfigSyncIntervalNanoseconds)
+      } catch {
+        break
+      }
+      if Task.isCancelled {
+        break
+      }
+      refreshRuntimeConfigFromDaemonIfChanged()
+      if runtimeRulesSyncTask == nil {
+        refreshRulesFromRuntimeIfChanged()
+      }
+    }
+  }
+
+  private func startRuntimeStatusSync() {
+    guard runtimeStatusSyncTask == nil else { return }
+    runtimeStatusSyncTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.runRuntimeStatusSyncLoop()
+    }
+  }
+
+  private func runRuntimeStatusSyncLoop() async {
+    refreshRuntimeStatusFromDaemon()
+
+    while !Task.isCancelled {
+      do {
+        try await Task.sleep(nanoseconds: runtimeStatusSyncIntervalNanoseconds)
+      } catch {
+        break
+      }
+      if Task.isCancelled {
+        break
+      }
+      refreshRuntimeStatusFromDaemon()
+    }
+  }
+
+  private func refreshRuntimeStatusFromDaemon() {
+    guard let engine else {
+      lastObservedRuntimeRunning = nil
+      lastObservedCaptureRunning = nil
+      lastObservedRuntimeRulesDump = nil
+      lastObservedRuntimeConfigDump = nil
+      return
+    }
+
+    let runtimeRunning = engine.isProxyRunning()
+    let captureRunning = runtimeRunning ? engine.isCaptureRunning() : false
+    let previousRuntime = lastObservedRuntimeRunning
+    let previousCapture = lastObservedCaptureRunning
+    lastObservedRuntimeRunning = runtimeRunning
+    lastObservedCaptureRunning = captureRunning
+
+    guard previousRuntime != runtimeRunning || previousCapture != captureRunning else { return }
+
+    isRuntimeRunning = runtimeRunning
+    isCaptureEnabled = captureRunning
+
+    if Self.isRuntimeStatusSummary(statusText) {
+      statusText = runtimeRunning
+        ? Self.runtimeStatusSummary(proxyRunning: runtimeRunning, captureRunning: captureRunning)
+        : Self.proxyStoppedStatusSummary
+    }
+
+    // External control (MCP/CLI) can toggle capture/rules without UI actions.
+    // Pull daemon snapshots immediately when status changes so the UI catches up faster.
+    if let cachedConfig = lastObservedRuntimeConfigDump {
+      applyRuntimeConfigFromDaemon(cachedConfig)
+    }
+    refreshRuntimeConfigFromDaemonIfChanged()
+    refreshRulesFromRuntimeIfChanged()
+  }
+
+  private func refreshRuntimeConfigFromDaemonIfChanged() {
+    guard let engine else { return }
+
+    let runtimeConfig: RuntimeEngineConfigDump
+    do {
+      runtimeConfig = try engine.dumpConfig()
+    } catch {
+      return
+    }
+
+    guard lastObservedRuntimeConfigDump != runtimeConfig else { return }
+    lastObservedRuntimeConfigDump = runtimeConfig
+    applyRuntimeConfigFromDaemon(runtimeConfig)
+  }
+
+  private func applyRuntimeConfigFromDaemon(_ config: RuntimeEngineConfigDump) {
+    withExternalRuntimeConfigApplySuppressed {
+      if let listen = parseListenAddressComponents(from: config.listenAddress) {
+        let lanMode = !isLoopbackHost(listen.host) || config.clientAllowlist.enabled
+        allowLANConnections = lanMode
+      } else {
+        allowLANConnections = config.clientAllowlist.enabled
+      }
+
+      lanClientAllowlist = config.clientAllowlist.ips
+
+      if shouldSyncCaptureModePreferencesFromDaemon(config) {
+        inspectBodies = config.inspect.enabled
+        throttleEnabled = config.throttle.enabled
+        throttleLatencyMs = normalizedKbpsOrMsInt(from: config.throttle.latencyMs)
+        throttleDownstreamKbps = kbpsInt(fromBytesPerSecond: config.throttle.downstreamBytesPerSecond)
+        throttleUpstreamKbps = kbpsInt(fromBytesPerSecond: config.throttle.upstreamBytesPerSecond)
+        throttleOnlySelectedHosts = config.throttle.onlySelectedHosts
+        throttleSelectedHosts = config.throttle.selectedHosts
+      }
+    }
+
+    if !isApplyingTransparentProxy {
+      transparentProxyEnabled = config.transparent.enabled
+      if config.transparent.enabled {
+        transparentProxyStateText = "ON (port \(config.transparent.listenPort))"
+      } else {
+        transparentProxyStateText = "OFF"
+      }
+    }
+  }
+
+  private func withExternalRuntimeConfigApplySuppressed(_ body: () -> Void) {
+    let previous = suppressExternalRuntimeConfigApply
+    suppressExternalRuntimeConfigApply = true
+    body()
+    suppressExternalRuntimeConfigApply = previous
+  }
+
+  private func shouldSyncCaptureModePreferencesFromDaemon(_ config: RuntimeEngineConfigDump) -> Bool {
+    isCaptureEnabled || !config.running
+  }
+
   private func runRulesRuntimeSyncLoop() async {
     refreshRulesFromRuntimeIfChanged()
 
@@ -1165,7 +1412,9 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func refreshRulesFromRuntimeIfChanged() {
-    guard isRunning else { return }
+    // In bypass mode the daemon intentionally clears rules, while the UI preserves capture rules locally.
+    // Sync when capture is active or when the runtime is fully stopped (external MCP edits while stopped).
+    guard isCaptureEnabled || !isRuntimeRunning else { return }
     guard let engine else { return }
 
     let runtimeRules: RuntimeRulesDump
@@ -1174,6 +1423,9 @@ final class ProxyViewModel: ObservableObject {
     } catch {
       return
     }
+
+    guard lastObservedRuntimeRulesDump != runtimeRules else { return }
+    lastObservedRuntimeRulesDump = runtimeRules
 
     let runtimeAllow = runtimeRules.allowlist
     let runtimeMapLocal = canonicalMapLocalRules(from: runtimeRules.mapLocal)
@@ -1394,7 +1646,7 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func replayLocalProxyEndpoint(for url: URL) -> (host: String, port: Int)? {
-    guard isRunning else { return nil }
+    guard isCaptureEnabled else { return nil }
     let listen = parsedListen
     let normalizedHost = normalizedReplayProxyHost(from: listen.host)
     let port = Int(listen.port)
@@ -1534,6 +1786,51 @@ final class ProxyViewModel: ObservableObject {
     return urls
   }
 
+  private func normalizedKbpsOrMsInt(from raw: UInt64) -> Int {
+    if raw > UInt64(Int.max) {
+      return Int.max
+    }
+    return Int(raw)
+  }
+
+  private func kbpsInt(fromBytesPerSecond raw: UInt64) -> Int {
+    let kbps = raw / 1024
+    if kbps > UInt64(Int.max) {
+      return Int.max
+    }
+    return Int(kbps)
+  }
+
+  private func parseListenAddressComponents(from rawAddress: String) -> (host: String, port: UInt16)? {
+    let raw = trimmed(rawAddress)
+    guard !raw.isEmpty else { return nil }
+
+    if let bracketClose = raw.firstIndex(of: "]"),
+      raw.first == "[",
+      bracketClose < raw.endIndex
+    {
+      let host = String(raw[raw.startIndex...bracketClose])
+      let next = raw.index(after: bracketClose)
+      if next < raw.endIndex, raw[next] == ":" {
+        let portText = String(raw[raw.index(after: next)...])
+        if let port = UInt16(portText) {
+          return (host, port)
+        }
+      }
+      return (host, listenPort)
+    }
+
+    if let colon = raw.lastIndex(of: ":"), colon < raw.endIndex {
+      let host = String(raw[..<colon])
+      let portText = String(raw[raw.index(after: colon)...])
+      if !host.isEmpty, let port = UInt16(portText) {
+        return (host, port)
+      }
+    }
+
+    return (raw, listenPort)
+  }
+
   private func parseListenAddress() -> (host: String, port: UInt16) {
     let raw = trimmed(listenAddress)
     guard !raw.isEmpty else {
@@ -1587,7 +1884,6 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func appendLog(level: UInt8, message: String) {
-    guard isRunning else { return }
     guard !suppressIncomingLogs else { return }
     handleLANAccessRequestLog(message)
     pendingLogEvents.append((level, message))
@@ -1630,70 +1926,79 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func scheduleCaptureRestartIfRunning(taskSlot: inout Task<Void, Never>?) {
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     taskSlot?.cancel()
     taskSlot = Task { @MainActor [weak self] in
       await Task.yield()
       guard let self else { return }
       guard !Task.isCancelled else { return }
-      guard self.isRunning else { return }
+      guard self.isCaptureEnabled else { return }
 
-      self.stopProxy()
+      self.stopCapture()
       guard !Task.isCancelled else { return }
-      guard !self.isRunning else { return }
+      guard !self.isCaptureEnabled else { return }
 
-      self.startProxy()
+      self.startCapture()
     }
   }
 
   private func applyAllowLANConnectionsIfRunning(oldValue: Bool) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != allowLANConnections else { return }
     scheduleCaptureRestartIfRunning(taskSlot: &listenAddressApplyTask)
   }
 
   private func applyLANClientAllowlistIfRunning(oldValue: [String]) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != lanClientAllowlist else { return }
     scheduleCaptureRestartIfRunning(taskSlot: &lanClientAllowlistApplyTask)
   }
 
   private func applyInspectBodiesIfRunning(oldValue: Bool) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != inspectBodies else { return }
     scheduleCaptureRestartIfRunning(taskSlot: &inspectBodiesApplyTask)
   }
 
   private func applyThrottleIfRunning(oldValue: Bool) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != throttleEnabled else { return }
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     scheduleThrottleApplyIfRunning()
   }
 
   private func applyThrottleLatencyIfRunning(oldValue: Int) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != throttleLatencyMs else { return }
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     scheduleThrottleApplyIfRunning()
   }
 
   private func applyThrottleDownstreamIfRunning(oldValue: Int) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != throttleDownstreamKbps else { return }
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     scheduleThrottleApplyIfRunning()
   }
 
   private func applyThrottleUpstreamIfRunning(oldValue: Int) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != throttleUpstreamKbps else { return }
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     scheduleThrottleApplyIfRunning()
   }
 
   private func applyThrottleOnlySelectedHostsIfRunning(oldValue: Bool) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != throttleOnlySelectedHosts else { return }
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     scheduleThrottleApplyIfRunning()
   }
 
   private func applyThrottleSelectedHostsIfRunning(oldValue: [String]) {
+    guard !suppressExternalRuntimeConfigApply else { return }
     guard oldValue != throttleSelectedHosts else { return }
-    guard isRunning else { return }
+    guard isCaptureEnabled else { return }
     scheduleThrottleApplyIfRunning()
   }
 
