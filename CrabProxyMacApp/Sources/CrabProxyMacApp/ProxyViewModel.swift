@@ -217,7 +217,7 @@ final class ProxyViewModel: ObservableObject {
   @Published var statusRewriteRules: [StatusRewriteRuleInput] = []
 
   private let runtimeCoordinator: ProxyRuntimeCoordinator
-  private let logStore = ProxyLogStore(maxLogEntries: 800)
+  private let logStore = ProxyLogStore(maxLogEntries: 10_000)
   private let ruleManager = ProxyRuleManager()
   private static let allowRulesDefaultsKey = "CrabProxyMacApp.allowRules"
   private static let mapLocalRulesDefaultsKey = "CrabProxyMacApp.mapLocalRules.v1"
