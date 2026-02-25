@@ -987,13 +987,17 @@ struct RulesSettingsView: View {
     @State private var mapRemoteEditorState: MapRemoteEditorState?
     @State private var statusRewriteEditorState: StatusRewriteEditorState?
     @State private var didInitializeDrafts = false
+    @State private var lastLoadedAllowRules: [AllowRuleInput] = []
+    @State private var lastLoadedMapLocalRules: [MapLocalRuleInput] = []
+    @State private var lastLoadedMapRemoteRules: [MapRemoteRuleInput] = []
+    @State private var lastLoadedStatusRewriteRules: [StatusRewriteRuleInput] = []
     @Environment(\.colorScheme) private var colorScheme
 
     private var hasUnsavedChanges: Bool {
-        draftAllowRules != model.allowRules
-            || draftMapLocalRules != model.mapLocalRules
-            || draftMapRemoteRules != model.mapRemoteRules
-            || draftStatusRewriteRules != model.statusRewriteRules
+        draftAllowRules != lastLoadedAllowRules
+            || draftMapLocalRules != lastLoadedMapLocalRules
+            || draftMapRemoteRules != lastLoadedMapRemoteRules
+            || draftStatusRewriteRules != lastLoadedStatusRewriteRules
     }
 
     var body: some View {
@@ -1358,6 +1362,10 @@ struct RulesSettingsView: View {
         draftMapLocalRules = model.mapLocalRules
         draftMapRemoteRules = model.mapRemoteRules
         draftStatusRewriteRules = model.statusRewriteRules
+        lastLoadedAllowRules = model.allowRules
+        lastLoadedMapLocalRules = model.mapLocalRules
+        lastLoadedMapRemoteRules = model.mapRemoteRules
+        lastLoadedStatusRewriteRules = model.statusRewriteRules
         if force {
             mapLocalEditorState = nil
             mapRemoteEditorState = nil

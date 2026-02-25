@@ -1412,15 +1412,25 @@ final class ProxyViewModel: ObservableObject {
   }
 
   private func refreshRulesFromRuntimeIfChanged() {
-    // In bypass mode the daemon intentionally clears rules, while the UI preserves capture rules locally.
-    // Sync when capture is active or when the runtime is fully stopped (external MCP edits while stopped).
-    guard isCaptureEnabled || !isRuntimeRunning else { return }
     guard let engine else { return }
 
     let runtimeRules: RuntimeRulesDump
     do {
       runtimeRules = try engine.dumpRules()
     } catch {
+      return
+    }
+
+    let runtimeRulesHasEntries =
+      !runtimeRules.allowlist.isEmpty
+      || !runtimeRules.mapLocal.isEmpty
+      || !runtimeRules.mapRemote.isEmpty
+      || !runtimeRules.statusRewrite.isEmpty
+
+    if !isCaptureEnabled && isRuntimeRunning && !runtimeRulesHasEntries {
+      // App-managed bypass mode often clears runtime rules intentionally.
+      // Keep the UI's saved capture rules unless an external agent has written non-empty runtime rules.
+      lastObservedRuntimeRulesDump = runtimeRules
       return
     }
 
